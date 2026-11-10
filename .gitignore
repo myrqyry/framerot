@@ -1,0 +1,12 @@
+# independent build outputs
+build/
+build-*/
+.cache/
+*.so
+
+# Local-only project history and credentials (not source release material)
+/ACTIVE_WORK.md
+/.meristem/local/
+/.env
+/.env.*
+!/.env.example
