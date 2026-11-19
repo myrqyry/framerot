@@ -106,7 +106,7 @@ int main(int argc, char **argv)
     obs_data_set_int(settings, "fps", 12);
     obs_data_set_int(settings, "kbps", 96);
     obs_data_set_int(settings, "gop", 8);
-    obs_source_t *filter = obs_source_create("obs_datamosh_filter", "geometry-filter", settings, nullptr);
+    obs_source_t *filter = obs_source_create("framerot_filter", "geometry-filter", settings, nullptr);
     obs_data_release(settings);
     if (!source || !filter) return 6;
     obs_source_filter_add(source, filter);

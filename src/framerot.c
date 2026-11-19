@@ -1,5 +1,5 @@
 /*
- * gop-rot: experimental OBS MPEG-4 datamosh filter, developed in 2026.
+ * framerot: experimental OBS MPEG-4 datamosh filter, developed in 2026.
  * GNU GPL version 2. See COPYING and README.md for upstream attribution.
  */
 #include <obs-module.h>
@@ -24,7 +24,7 @@ struct mosh_filter {
 static const char *mosh_name(void *unused)
 {
     UNUSED_PARAMETER(unused);
-    return "gop-rot";
+    return "framerot";
 }
 
 /* Defaults are per effect, not an arbitrary compromise across seven modes.
@@ -321,9 +321,7 @@ static void mosh_render(void *data, gs_effect_t *unused)
 }
 
 static struct obs_source_info mosh_info = {
-    /* Compatibility: OBS persists this type ID in existing scene files.
-     * Do not rename it when changing the user-facing gop-rot label. */
-    .id = "obs_datamosh_filter",
+    .id = "framerot_filter",
     .type = OBS_SOURCE_TYPE_FILTER,
     .output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_SRGB,
     .get_name = mosh_name,

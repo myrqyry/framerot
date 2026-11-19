@@ -1,6 +1,6 @@
 /*
  * Derived in part from OBS Retro Effects (FiniteSingularity), through the
- * myrqyry/obs-retro-effects fork. Substantially modified for gop-rot in 2026.
+ * myrqyry/obs-retro-effects fork. Substantially modified for framerot in 2026.
  * GNU GPL version 2. See COPYING and README.md for attribution.
  */
 #include "video-roundtrip.h"
@@ -448,8 +448,6 @@ int retro_video_process(struct retro_video *ctx, const uint8_t *rgba, int input_
                 av_packet_unref(ctx->rewind_packets[i]);
             ctx->rewind_seen = 0;
         }
-        /* The existing keyframe skip mode remains the default so old OBS
-         * scenes preserve their saved behavior without migration. */
         if (ctx->mosh_mode == RETRO_MOSH_KEYFRAME_SKIP &&
             (ctx->packet->flags & AV_PKT_FLAG_KEY) && ctx->has_decoder_reference) {
 			if (ctx->mosh_skip_keyframes > 0 &&

@@ -107,7 +107,7 @@ int main(int argc, char **argv)
      * overrides. The current fixed defaults (96kbps/12fps/6 GOP) must fail
      * this regression when switching to Keyframe Anchor or Flow Drift. */
     obs_source_t *preset_source = obs_source_create(
-        "obs_datamosh_filter", "mosh-preset-test", nullptr, nullptr);
+        "framerot_filter", "mosh-preset-test", nullptr, nullptr);
     if (!preset_source) return 15;
     obs_data_t *preset_settings = obs_source_get_settings(preset_source);
     obs_properties_t *preset_props = obs_source_properties(preset_source);
@@ -180,7 +180,7 @@ int main(int argc, char **argv)
     obs_data_t *saved = obs_data_create();
     obs_data_set_int(saved, "mode", 6);
     obs_data_set_int(saved, "fps", 19);
-    obs_source_t *reload = obs_source_create("obs_datamosh_filter", "mosh-reload-test", saved, nullptr);
+    obs_source_t *reload = obs_source_create("framerot_filter", "mosh-reload-test", saved, nullptr);
     if (!reload) return 24;
     obs_data_t *reloaded = obs_source_get_settings(reload);
     if (obs_data_get_int(reloaded, "fps") != 19 ||
@@ -197,15 +197,14 @@ int main(int argc, char **argv)
     obs_data_release(saved);
     std::printf("SHOWCASE_DEFAULTS checked=9 explicit_overrides=preserved saved_mode=reloaded\n");
 
-    /* The public name changes, but the registered OBS source type ID MUST
-     * remain stable so saved scenes keep their existing filter settings. */
-    const char *display_name = obs_source_get_display_name("obs_datamosh_filter");
-    if (!display_name || std::strcmp(display_name, "gop-rot") != 0) {
+    /* Verify the clean-break OBS filter identity. */
+    const char *display_name = obs_source_get_display_name("framerot_filter");
+    if (!display_name || std::strcmp(display_name, "framerot") != 0) {
         std::fprintf(stderr, "RENAME_DISPLAY_FAILED: %s\n",
                      display_name ? display_name : "(missing)");
         return 30;
     }
-    std::printf("RENAME_OBS_DISPLAY name=%s source_id=obs_datamosh_filter\n", display_name);
+    std::printf("RENAME_OBS_DISPLAY name=%s source_id=framerot_filter\n", display_name);
 
     auto *source = obs_source_create("mosh_test_source", "mosh-test-input", nullptr, nullptr);
     auto *settings = obs_data_create();
@@ -213,7 +212,7 @@ int main(int argc, char **argv)
     obs_data_set_int(settings, "gop", 4);
     obs_data_set_int(settings, "fps", 12);
     obs_data_set_int(settings, "kbps", 64);
-    auto *filter = obs_source_create("obs_datamosh_filter", "mosh-test-filter", settings, nullptr);
+    auto *filter = obs_source_create("framerot_filter", "mosh-test-filter", settings, nullptr);
     obs_data_release(settings);
     if (!source || !filter) {
         std::fprintf(stderr, "FILTER_CREATE_FAILED\n");

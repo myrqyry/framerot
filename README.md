@@ -1,8 +1,8 @@
-# gop-rot
+# framerot
 
 An independent native OBS Studio video filter that encodes and decodes real **MPEG-4 Part 2** frames. Its effects either **alter compressed I/P-frame packets** or **combine decoded imagery and real decoder motion vectors**. It is codec-based datamoshing and temporal manipulation, not a randomized shader imitation.
 
-The filter appears as **gop-rot** under a video source's Filters → Effect Filters. It is separate from HyperShaderFX's GPU-feedback datamosh shader and OBS Retro Effects' codec filter.
+The filter appears as **framerot** under a video source's Filters → Effect Filters. It is separate from HyperShaderFX's GPU-feedback datamosh shader and OBS Retro Effects' codec filter.
 
 **Status: experimental.** The locally verified CI package targets **Linux
 x86_64 and OBS 32.2.0**, using FFmpeg 6 libraries. Performance and visual output vary by
@@ -56,7 +56,7 @@ P-Frame Rewind stores at most 12 compressed P packets and resets its history at 
 
 Keyframe Anchor only stores one compressed I packet, bounded to the same codec configuration. The initial I frame always passes through unchanged. For a noticeable effect, try GOP 9–18, anchor span 4–8, and moving footage with hard scene changes. The encoder and decoder continue running normally, with no change to the source's dimensions.
 
-Common settings: **Keyframe interval** (2–120 frames), **Bitrate** (8–2000 kb/s), and **Codec frame rate** (1–30 FPS). The filter repeats the last decoded output between processing ticks. Classic is still the default for pre-existing filter instances. This is MPEG-4 Part 2 processing, not a claim of duplicating Datamosher Pro's entire effect collection.
+Common settings: **Keyframe interval** (2–120 frames), **Bitrate** (8–2000 kb/s), and **Codec frame rate** (1–30 FPS). The filter repeats the last decoded output between processing ticks. Classic is the default effect. This is MPEG-4 Part 2 processing, not a claim of duplicating Datamosher Pro's entire effect collection.
 
 ## OBS scene transforms and projection safety (v0.4.1)
 
@@ -79,61 +79,53 @@ Requires CMake, Ninja, the OBS/libobs SDK, FFmpeg development libraries (libavco
 Run from this checkout:
 
 ~~~bash
-cmake -S . -B build-gop-rot -G Ninja \
+cmake -S . -B build-framerot -G Ninja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -Dlibobs_DIR="/path/to/OBS-32/lib/cmake/libobs"
-cmake --build build-gop-rot --parallel 4
+cmake --build build-framerot --parallel 4
 
 # Runs the genuine FFmpeg packet test and the real OBS/OpenGL filter test
-xvfb-run -a ctest --test-dir build-gop-rot --output-on-failure
+xvfb-run -a ctest --test-dir build-framerot --output-on-failure
 
 # Stage a copy away from your installed OBS, without activating it:
-cmake --install build-gop-rot --prefix /tmp/gop-rot-stage
+cmake --install build-framerot --prefix /tmp/framerot-stage
 ~~~
 
 Replace the placeholder path with a directory containing your compatible
 libobsConfig.cmake. OBS SDK locations vary among distributions and source builds.
 The runtime OBS version must not be older than the build SDK.
 
-The native output is build-gop-rot/gop-rot.so. Tests load the module into an
+The native output is build-framerot/framerot.so. Tests load the module into an
 isolated headless OBS instance without changing daily scenes or plugins.
 
 To install *after* testing and deciding to use it:
 
 ~~~bash
-cmake --install build-gop-rot \
-  --prefix "$HOME/.config/obs-studio/plugins/gop-rot"
+cmake --install build-framerot \
+  --prefix "$HOME/.config/obs-studio/plugins/framerot"
 ~~~
 
 Restart OBS after installation. Do **not** install to system OBS directories.
 For a prebuilt Linux CI package, extract the archive into
-~/.config/obs-studio/plugins/ (it already contains a gop-rot directory).
+~/.config/obs-studio/plugins/ (it already contains a framerot directory).
 The package does not bundle FFmpeg runtime libraries; inspect its included
 README and COPYING before installing.
-
-**Upgrading from obs-datamosh:** the filter's stored OBS source type ID remains
-obs_datamosh_filter intentionally so existing scene filters and their settings
-continue to work. Do not leave the old obs-datamosh.so installed alongside
-gop-rot.so: duplicate modules would register the same source type. The
-migration moves the plugin directory to gop-rot and retains versioned backups.
-The original OBS scene collection should be backed up before renaming a saved
-filter instance's visible label. The display label is lowercase gop-rot.
 
 ## CI builds
 
 The GitHub Actions workflow **Build and test** is configured for pushes and PRs
 to `main`, and can also be started manually in the Actions tab. It builds
 **OBS 32.2.0** from a SHA-256-verified upstream source archive on a native
-Ubuntu 24.04 x86_64 runner, then builds `gop-rot` against that SDK (not against
+Ubuntu 24.04 x86_64 runner, then builds `framerot` against that SDK (not against
 the runner's potentially older `libobs-dev` package).
 
 The job runs **all 10 native tests** using FFmpeg and software-rendered OBS/OpenGL
 under Xvfb, including landscape/portrait effects and the original scene
 geometry regression. Only after those pass does it stage the plugin and upload:
 
-- `gop-rot-linux-x86_64-obs32.tar.gz`: extract into the OBS plugin directory;
-  includes `gop-rot/bin/64bit/gop-rot.so`, COPYING, README and OBS SDK version
-- `gop-rot-source.tar.gz`: tracked source files at the tested Git commit (private local notes and build outputs excluded)
+- `framerot-linux-x86_64-obs32.tar.gz`: extract into the OBS plugin directory;
+  includes `framerot/bin/64bit/framerot.so`, COPYING, README and OBS SDK version
+- `framerot-source.tar.gz`: tracked source files at the tested Git commit (private local notes and build outputs excluded)
 - `SHA256SUMS`: checksums for installed-package files
 
 This artifact is **Linux x86_64 only** and expects compatible system FFmpeg
@@ -160,10 +152,9 @@ in [myrqyry/obs-retro-effects](https://github.com/myrqyry/obs-retro-effects),
 which is a fork of
 **[FiniteSingularity/obs-retro-effects](https://github.com/FiniteSingularity/obs-retro-effects)**.
 The upstream project is GPL-2.0, and the matching license text is preserved
-in COPYING. gop-rot isolates and extends that codec/graphics implementation
+in COPYING. framerot isolates and extends that codec/graphics implementation
 with compressed-packet effects and dedicated tests. It is **not an official
 OBS Studio or OBS Retro Effects release**.
 
-The internal OBS filter type ID remains obs_datamosh_filter solely for
-backward compatibility with saved scene files. The project includes neither
+The OBS filter type ID is `framerot_filter`. The project includes neither
 the upstream OBS Retro Effects UI nor its other filters.

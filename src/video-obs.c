@@ -1,6 +1,6 @@
 /*
  * Derived in part from OBS Retro Effects (FiniteSingularity), through the
- * myrqyry/obs-retro-effects fork. Substantially modified for gop-rot in 2026.
+ * myrqyry/obs-retro-effects fork. Substantially modified for framerot in 2026.
  * GNU GPL version 2. See COPYING and README.md for attribution.
  */
 #include "video-obs.h"

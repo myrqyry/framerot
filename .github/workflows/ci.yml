@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: gop-rot-ci-${{ github.event.pull_request.number || github.ref }}
+  group: framerot-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -44,10 +44,10 @@ jobs:
       - name: Upload verified Linux binary and source
         uses: actions/upload-artifact@v6
         with:
-          name: gop-rot-linux-obs32-${{ github.sha }}
+          name: framerot-linux-obs32-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/gop-rot-ci/artifacts/gop-rot-linux-x86_64-obs32.tar.gz
-            ${{ runner.temp }}/gop-rot-ci/artifacts/gop-rot-source.tar.gz
-            ${{ runner.temp }}/gop-rot-ci/artifacts/SHA256SUMS
+            ${{ runner.temp }}/framerot-ci/artifacts/framerot-linux-x86_64-obs32.tar.gz
+            ${{ runner.temp }}/framerot-ci/artifacts/framerot-source.tar.gz
+            ${{ runner.temp }}/framerot-ci/artifacts/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
