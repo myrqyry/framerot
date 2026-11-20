@@ -81,7 +81,7 @@ int main(void)
     o.mosh_anchor_span = 13;
     assert(retro_video_create(&o) == NULL);
     o.mosh_anchor_span = 3;
-    o.codec = RETRO_VIDEO_H263;
+    o.codec = (enum retro_video_codec)1;
     assert(retro_video_create(&o) == NULL);
     exercise(2);
     exercise(4);

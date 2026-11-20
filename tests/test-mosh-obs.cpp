@@ -113,6 +113,29 @@ int main(int argc, char **argv)
     obs_properties_t *preset_props = obs_source_properties(preset_source);
     obs_property_t *preset_mode = obs_properties_get(preset_props, "mode");
     if (!preset_settings || !preset_props || !preset_mode) return 16;
+    for (const char *key : {"codec_height","wet_mix","preserve_alpha","reference","predictive","layer_flow","layer_peel","layer_shimmer","layer_compressed","mv_x","mv_y","residual_scale","residual_loss","hold_anchor","release_anchor","reset_codec"}) {
+        if (!obs_properties_get(preset_props,key)) {
+            std::fprintf(stderr,"MISSING_INSTRUMENT_CONTROL %s\n",key);return 31;
+        }
+    }
+    if (obs_data_get_int(preset_settings,"mode")!=9 ||
+        obs_data_get_int(preset_settings,"codec_height")!=192 ||
+        obs_data_get_int(preset_settings,"fps")!=18 ||
+        obs_data_get_int(preset_settings,"kbps")!=320 ||
+        obs_data_get_int(preset_settings,"gop")!=18 ||
+        obs_data_get_int(preset_settings,"reference")!=2 ||
+        obs_data_get_int(preset_settings,"predictive")!=0 ||
+        !obs_data_get_bool(preset_settings,"layer_compressed") ||
+        !obs_data_get_bool(preset_settings,"layer_flow") ||
+        obs_data_get_bool(preset_settings,"layer_peel") ||
+        obs_data_get_bool(preset_settings,"layer_shimmer") ||
+        obs_data_get_int(preset_settings,"wet_mix")!=100 ||
+        !obs_data_get_bool(preset_settings,"preserve_alpha") ||
+        !obs_property_visible(obs_properties_get(preset_props,"mv_x")) ||
+        !obs_property_visible(obs_properties_get(preset_props,"vector_strength")) ||
+        !obs_property_visible(obs_properties_get(preset_props,"anchor_span"))) {
+        std::fprintf(stderr,"NEW_INSTRUMENT_SHOWCASE_DEFAULTS_FAILED\n");return 32;
+    }
     struct Showcase {
         int mode, fps, kbps, gop, p_interval, p_burst;
     };
@@ -171,6 +194,106 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "SHOWCASE_OVERRIDES_CLOBBERED\n");
         return 23;
     }
+    // Instrument only shows controls whose operations consume them.
+    obs_data_set_int(preset_settings, "mode", 9);
+    obs_data_set_int(preset_settings, "reference", 0);
+    obs_data_set_int(preset_settings, "predictive", 0);
+    for(const char *key:{"layer_compressed","layer_flow","layer_peel","layer_shimmer"})
+        obs_data_set_bool(preset_settings,key,false);
+    obs_property_modified(preset_mode, preset_settings);
+    auto visible = [&](const char *key) {
+        auto *p = obs_properties_get(preset_props, key);
+        return p && obs_property_visible(p);
+    };
+    for (const char *key : {"mv_x","residual_loss","vector_strength","slice_history",
+                            "rounding_interval","skip_keyframes","anchor_span","p_interval","p_burst","rewind_depth"}) {
+        if (visible(key)) {
+            std::fprintf(stderr,"INSTRUMENT_INACTIVE_CONTROL_VISIBLE %s\n",key);
+            return 40;
+        }
+    }
+    obs_data_set_bool(preset_settings,"layer_compressed",true);
+    obs_property_modified(obs_properties_get(preset_props,"layer_compressed"),preset_settings);
+    if (!visible("mv_x") || !visible("residual_loss") || visible("vector_strength")) return 41;
+    obs_data_set_int(preset_settings,"reference",2);
+    obs_property_modified(obs_properties_get(preset_props,"reference"),preset_settings);
+    if (!visible("anchor_span") || visible("skip_keyframes")) return 42;
+    obs_data_set_int(preset_settings,"predictive",2);
+    obs_property_modified(obs_properties_get(preset_props,"predictive"),preset_settings);
+    if (!visible("p_interval") || !visible("p_burst") || visible("rewind_depth")) return 43;
+    // A creative starting point is explicit, one-shot, and leaves wet/alpha alone.
+    obs_data_set_int(preset_settings,"wet_mix",37);
+    obs_data_set_bool(preset_settings,"preserve_alpha",false);
+    auto *recipe = obs_properties_get(preset_props,"instrument_recipe");
+    if (!recipe || !visible("instrument_recipe")) return 44;
+    obs_data_set_int(preset_settings,"instrument_recipe",1);
+    obs_property_modified(recipe,preset_settings);
+    if (obs_data_get_int(preset_settings,"instrument_recipe") != 0 ||
+        obs_data_get_int(preset_settings,"codec_height") != 288 ||
+        obs_data_get_int(preset_settings,"fps") != 30 ||
+        obs_data_get_int(preset_settings,"mv_x") != 180 ||
+        obs_data_get_int(preset_settings,"residual_loss") != 15 ||
+        obs_data_get_int(preset_settings,"reference") != 2 ||
+        !obs_data_get_bool(preset_settings,"layer_compressed") ||
+        obs_data_get_int(preset_settings,"wet_mix") != 37 ||
+        obs_data_get_bool(preset_settings,"preserve_alpha")) return 45;
+    obs_data_set_int(preset_settings,"mv_x",95);
+    obs_properties_apply_settings(preset_props,preset_settings);
+    if (obs_data_get_int(preset_settings,"mv_x") != 95) return 46;
+    obs_data_set_int(preset_settings,"instrument_recipe",2);
+    obs_property_modified(recipe,preset_settings);
+    if (!visible("vector_strength") || !visible("mv_x") || visible("anchor_span") ||
+        obs_data_get_int(preset_settings,"mv_x")!=250 ||
+        obs_data_get_int(preset_settings,"codec_height")!=192) return 48;
+    obs_data_set_int(preset_settings,"instrument_recipe",3);
+    obs_property_modified(recipe,preset_settings);
+    if (!visible("slice_history") || !visible("p_interval") || visible("mv_x") ||
+        visible("vector_strength") || obs_data_get_int(preset_settings,"slice_history")!=6 ||
+        obs_data_get_int(preset_settings,"predictive")!=3) return 49;
+    for (int round=0;round<32;round++) {
+        obs_data_set_int(preset_settings,"instrument_recipe",4);
+        obs_property_modified(recipe,preset_settings);
+        auto value=[&](const char *name){return obs_data_get_int(preset_settings,name);};
+        auto enabled=[&](const char *name){return obs_data_get_bool(preset_settings,name);};
+        int ref=value("reference"), pred=value("predictive");
+        if (ref<0 || ref>2 || pred<0 || pred>4 || value("instrument_recipe")!=0 ||
+            value("codec_height")<144 || value("codec_height")>288 || value("codec_height")%16 ||
+            value("fps")<12 || value("fps")>24 || value("kbps")<160 || value("kbps")>650 ||
+            value("gop")<12 || value("gop")>24 || value("skip_keyframes")<1 || value("skip_keyframes")>2 ||
+            value("p_burst")<1 || value("p_burst")>=value("p_interval") ||
+            value("rewind_depth")>=value("gop")-1 || value("anchor_span")<2 || value("anchor_span")>4 ||
+            value("mv_x")< -150 || value("mv_x")>250 || value("mv_y")< -150 || value("mv_y")>250 ||
+            value("residual_scale")<30 || value("residual_scale")>110 ||
+            value("residual_loss")<0 || value("residual_loss")>30 ||
+            value("vector_strength")<80 || value("vector_strength")>250 ||
+            value("vector_persistence")<25 || value("vector_persistence")>75 ||
+            value("slice_history")<2 || value("slice_history")>6 || value("slice_height")<4 || value("slice_height")>24 ||
+            value("rounding_interval")<1 || value("rounding_interval")>6 ||
+            value("wet_mix")!=37 || enabled("preserve_alpha")) {
+            std::fprintf(stderr,"RANDOM_RECIPE_OUT_OF_BOUNDS round=%d\n",round);return 51;
+        }
+        int count=(ref!=0)+(pred!=0);
+        for (const char *key:{"layer_flow","layer_peel","layer_shimmer","layer_compressed"}) {
+            if(enabled(key))count++;
+        }
+        if(count<1 || count>2 || visible("mv_x")!=enabled("layer_compressed") ||
+            visible("slice_history")!=enabled("layer_peel") ||
+            visible("anchor_span")!=(ref==2)) return 52;
+    }
+    obs_data_set_int(preset_settings,"instrument_recipe",3);
+    obs_property_modified(recipe,preset_settings);
+    obs_source_update(preset_source,preset_settings);
+    auto *reopened=obs_source_properties(preset_source);
+    if (!obs_property_visible(obs_properties_get(reopened,"slice_history")) ||
+        obs_property_visible(obs_properties_get(reopened,"mv_x"))) return 50;
+    obs_properties_destroy(reopened);
+    if(obs_property_list_item_count(preset_mode)!=10 ||
+       obs_properties_get(preset_props,"crush_codec")) {
+        std::fprintf(stderr,"HISTORICAL_MODE_NOT_REMOVED\n");return 47;
+    }
+    for(size_t i=0;i<obs_property_list_item_count(preset_mode);i++)
+        if(obs_property_list_item_int(preset_mode,i)==10)return 47;
+    std::printf("INSTRUMENT_CONTEXT_AND_RECIPE_OK\n");
     obs_properties_destroy(preset_props);
     obs_data_release(preset_settings);
     obs_source_release(preset_source);
@@ -195,6 +318,22 @@ int main(int argc, char **argv)
     obs_data_release(reloaded);
     obs_source_release(reload);
     obs_data_release(saved);
+    saved=obs_data_create();
+    obs_data_set_int(saved,"mode",9);
+    obs_data_set_int(saved,"codec_height",144);
+    obs_data_set_int(saved,"reference",0);
+    obs_data_set_bool(saved,"layer_flow",false);
+    obs_data_set_bool(saved,"layer_compressed",false);
+    reload=obs_source_create("framerot_filter","custom-instrument",saved,nullptr);
+    if(!reload)return 56;
+    reloaded=obs_source_get_settings(reload);
+    if(obs_data_get_int(reloaded,"codec_height")!=144 ||
+        obs_data_get_int(reloaded,"reference")!=0 ||
+        obs_data_get_bool(reloaded,"layer_flow") ||
+        obs_data_get_bool(reloaded,"layer_compressed")) return 57;
+    obs_data_release(reloaded);
+    obs_source_release(reload);
+    obs_data_release(saved);
     std::printf("SHOWCASE_DEFAULTS checked=9 explicit_overrides=preserved saved_mode=reloaded\n");
 
     /* Verify the clean-break OBS filter identity. */
@@ -208,6 +347,7 @@ int main(int argc, char **argv)
 
     auto *source = obs_source_create("mosh_test_source", "mosh-test-input", nullptr, nullptr);
     auto *settings = obs_data_create();
+    obs_data_set_int(settings, "mode", 0);
     obs_data_set_int(settings, "skip_keyframes", 1);
     obs_data_set_int(settings, "gop", 4);
     obs_data_set_int(settings, "fps", 12);
@@ -311,21 +451,45 @@ int main(int argc, char **argv)
     }
     obs_data_release(mode_preview);
     obs_properties_destroy(props);
-    obs_source_filter_add(source, filter);
+    auto *fresh=obs_source_create("framerot_filter","default-showcase",nullptr,nullptr);
+    if(!fresh)return 58;
+    obs_source_filter_add(source,fresh);
     obs_set_output_source(0, source);
 
     int decoded_nonblack = 0, filled_left_edge = 0, filled_right_edge = 0;
     int filled_top_edge = 0, filled_bottom_edge = 0, sample_changes = 0;
     int last_red = -1, last_green = -1;
-    for (int frame = 0; frame < 108; ++frame) {
+    for (int frame = -28; frame < 132; ++frame) {
+        if(frame==0) {
+            std::printf("DEFAULT_SHOWCASE_RENDER frames=%d changed=%d\n",decoded_nonblack,sample_changes);
+            if(decoded_nonblack<20 || sample_changes<10)return 59;
+            obs_source_filter_remove(source,fresh);
+            obs_source_release(fresh);
+            obs_source_filter_add(source,filter);
+            decoded_nonblack=filled_left_edge=filled_right_edge=filled_top_edge=filled_bottom_edge=sample_changes=0;
+            last_red=last_green=-1;
+        }
         /* Switch among compressed-packet modes during live render. */
         if (frame == 12 || frame == 24 || frame == 36 || frame == 48 ||
-            frame == 60 || frame == 72 || frame == 84 || frame == 96) {
+            frame == 60 || frame == 72 || frame == 84 || frame == 96 || frame == 108 || frame == 120) {
             obs_data_t *updated = obs_source_get_settings(filter);
             obs_data_set_int(updated, "mode",
                 frame == 12 ? 1 : frame == 24 ? 2 : frame == 36 ? 3 :
                 frame == 48 ? 4 : frame == 60 ? 5 : frame == 72 ? 6 :
-                frame == 84 ? 7 : 8);
+                frame == 84 ? 7 : frame == 96 ? 8 : 9);
+            obs_data_set_int(updated,"codec_height",frame==120?288:144);
+            obs_data_set_int(updated,"wet_mix",frame==120?50:100);
+            obs_data_set_bool(updated,"preserve_alpha",frame==120);
+            obs_data_set_int(updated,"reference",2);
+            obs_data_set_int(updated,"predictive",1);
+            obs_data_set_bool(updated,"layer_flow",true);
+            obs_data_set_bool(updated,"layer_peel",true);
+            obs_data_set_bool(updated,"layer_shimmer",true);
+            obs_data_set_bool(updated,"layer_compressed",true);
+            obs_data_set_int(updated,"mv_x",200);
+            obs_data_set_int(updated,"mv_y",-100);
+            obs_data_set_int(updated,"residual_scale",70);
+            obs_data_set_int(updated,"residual_loss",20);
             obs_data_set_int(updated, "p_interval", frame == 36 ? 3 : 8);
             obs_data_set_int(updated, "p_burst", 3);
             obs_data_set_int(updated, "vector_strength", 250);
@@ -338,6 +502,13 @@ int main(int argc, char **argv)
             obs_data_set_int(updated, "skip_keyframes", frame == 48 ? 2 : 0);
             obs_source_update(filter, updated);
             obs_data_release(updated);
+        }
+        if(frame==112 || frame==116 || frame==125) {
+            auto *controls=obs_source_properties(filter);
+            auto *button=obs_properties_get(controls,frame==112?"hold_anchor":frame==116?"release_anchor":"reset_codec");
+            if(!button) return 33;
+            obs_property_button_clicked(button,filter);
+            obs_properties_destroy(controls);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(110));
         obs_enter_graphics();

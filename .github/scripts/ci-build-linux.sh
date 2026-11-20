@@ -27,7 +27,7 @@ cmake -S "$root" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
 cmake --build "$build" --parallel 4
 listed="$(ctest --test-dir "$build" -N)"
 printf '%s\n' "$listed"
-printf '%s\n' "$listed" | grep -F 'Total Tests: 10'
+printf '%s\n' "$listed" | grep -F 'Total Tests: 14'
 printf '%s\n' "$listed" | grep -F 'mosh_obs_scene_projection_camera'
 export LD_LIBRARY_PATH="$sdk/lib:$sdk/lib/obs-plugins:${LD_LIBRARY_PATH:-}"
 export LIBGL_ALWAYS_SOFTWARE=1
@@ -36,11 +36,15 @@ cmake --install "$build" --prefix "$stage/framerot"
 module="$stage/framerot/bin/64bit/framerot.so"
 test -s "$module"
 cp "$root/COPYING" "$root/README.md" "$stage/framerot/"
+mkdir -p "$stage/framerot/docs"
+for doc in guide.md technical.md development.md; do
+  cp "$root/docs/$doc" "$stage/framerot/docs/$doc"
+done
 printf '%s\n' "$version" > "$stage/framerot/OBS_SDK_VERSION"
 if readelf -d "$module" | grep -E '(RPATH|RUNPATH)' | grep -F "$work"; then
  echo '::error::CI-specific RUNPATH found in installable plugin'; exit 1
 fi
-test "$(find "$stage/framerot" -type f | wc -l)" -eq 4
+test "$(find "$stage/framerot" -type f | wc -l)" -eq 7
 (cd "$stage" && find framerot -type f -print0 | sort -z | xargs -0 sha256sum) > "$out/SHA256SUMS"
 tar -C "$stage" -czf "$out/framerot-linux-x86_64-obs32.tar.gz" framerot
 tar -tzf "$out/framerot-linux-x86_64-obs32.tar.gz" | grep -Fx 'framerot/bin/64bit/framerot.so'

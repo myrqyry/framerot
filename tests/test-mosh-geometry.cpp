@@ -103,6 +103,7 @@ int main(int argc, char **argv)
 
     obs_source_t *source = obs_source_create("datamosh_geometry_input", "geometry-source", nullptr, nullptr);
     obs_data_t *settings = obs_data_create();
+    obs_data_set_int(settings, "mode", 0);
     obs_data_set_int(settings, "fps", 12);
     obs_data_set_int(settings, "kbps", 96);
     obs_data_set_int(settings, "gop", 8);

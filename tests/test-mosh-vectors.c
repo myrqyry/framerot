@@ -83,7 +83,7 @@ int main(void)
     opt.mosh_mode = RETRO_MOSH_VECTOR_DRIFT;
     opt.mosh_vector_strength = 250;
     opt.mosh_vector_persistence = 65;
-    opt.codec = RETRO_VIDEO_H263;
+    opt.codec = (enum retro_video_codec)1;
     assert(retro_video_create(&opt) == NULL);
     opt.codec = RETRO_VIDEO_MPEG4_PART2;
     opt.mosh_vector_strength = 501;

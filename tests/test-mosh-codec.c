@@ -31,8 +31,13 @@ int main(void)
     options.gop_size = 6;
     options.mosh_skip_keyframes = 1;
     struct retro_video_options unsupported = options;
-    unsupported.codec = RETRO_VIDEO_H263;
+    unsupported.codec = (enum retro_video_codec)1;
     assert(retro_video_create(&unsupported) == NULL); /* No unsupported codec bitstream mosh. */
+    unsupported.mosh_skip_keyframes=0;
+    assert(retro_video_create(&unsupported)==NULL);
+    unsupported=options;
+    unsupported.mosh_mode=(enum retro_mosh_mode)10;
+    assert(retro_video_create(&unsupported)==NULL);
     unsupported = options;
     unsupported.mosh_skip_keyframes = 17;
     assert(retro_video_create(&unsupported) == NULL); /* Bound the keyframe skip cycle. */

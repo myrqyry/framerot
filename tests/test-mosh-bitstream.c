@@ -81,7 +81,7 @@ int main(void)
     o.mosh_rounding_interval = 61;
     assert(retro_video_create(&o) == NULL);
     o.mosh_rounding_interval = 2;
-    o.codec = RETRO_VIDEO_H263;
+    o.codec = (enum retro_video_codec)1;
     assert(retro_video_create(&o) == NULL);
     compare(12, 1);
     compare(15, 2);

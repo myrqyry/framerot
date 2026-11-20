@@ -4,8 +4,9 @@
  * GNU GPL version 2. See COPYING and README.md for attribution.
  */
 #include "video-roundtrip.h"
+#include "mpeg4-edit.h"
 
-#include <libavcodec/avcodec.h>
+#include "ffmpeg-compat.h"
 #include <libavutil/error.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
@@ -50,7 +51,6 @@ struct retro_video {
     uint64_t rounding_flips;
 	struct SwsContext *rgba_to_yuv;
 	struct SwsContext *yuv_to_rgba;
-	enum AVPixelFormat encode_pixel_format;
 	int64_t pts;
 	uint64_t bytes;
 	uint64_t packets;
@@ -59,37 +59,17 @@ struct retro_video {
     uint64_t dropped_pframes;
     uint64_t replayed_pframes;
     uint64_t p_seen;
-    enum retro_mosh_mode mosh_mode;
+    enum retro_reference reference;
+    enum retro_predictive predictive;
+    unsigned layers;
+    bool hold, release_anchor;
+    struct mpeg4_edit_options editor;
+    uint64_t edited_packets,edited_vectors,edited_coefficients,edited_blocks,edit_unsupported;
     int p_interval;
     int p_burst;
 	int mosh_skip_keyframes;
 	int skipped_in_cycle;
 	bool has_decoder_reference;
-};
-
-struct retro_video_preset {
-	enum retro_video_codec kind;
-	const char *name;
-	enum AVCodecID avcodec;
-	enum AVPixelFormat input_format;
-	int width, height, fps, bitrate, gop;
-};
-
-/* Capture targets are examples chosen by video era; not archival device claims.
- * Cinepak and MS Video 1 are RGB; SVQ1 uses YUV410P; MJPEG uses full-range
- * JPEG YUV422P. Do not flatten these to a shared YUV420P pipeline. */
-static const struct retro_video_preset presets[] = {
-	{RETRO_VIDEO_H263, "H.263 baseline", AV_CODEC_ID_H263, AV_PIX_FMT_YUV420P, 176, 144, 10, 64000, 30},
-	{RETRO_VIDEO_MPEG4_PART2, "MPEG-4 Visual Simple Profile", AV_CODEC_ID_MPEG4, AV_PIX_FMT_YUV420P, 176, 144, 10,
-	 64000, 30},
-	{RETRO_VIDEO_CINEPAK, "Cinepak", AV_CODEC_ID_CINEPAK, AV_PIX_FMT_RGB24, 320, 240, 15, 300000, 15},
-	{RETRO_VIDEO_SVQ1, "Sorenson Video 1 (SVQ1)", AV_CODEC_ID_SVQ1, AV_PIX_FMT_YUV410P, 320, 240, 15, 250000, 15},
-	{RETRO_VIDEO_MSVIDEO1, "Microsoft Video 1", AV_CODEC_ID_MSVIDEO1, AV_PIX_FMT_RGB555LE, 160, 120, 15, 180000,
-	 15},
-	{RETRO_VIDEO_FLV1, "Sorenson Spark (FLV1)", AV_CODEC_ID_FLV1, AV_PIX_FMT_YUV420P, 320, 240, 15, 200000, 15},
-	{RETRO_VIDEO_MPEG1, "MPEG-1 PAL CD video", AV_CODEC_ID_MPEG1VIDEO, AV_PIX_FMT_YUV420P, 352, 288, 25, 1150000,
-	 15},
-	{RETRO_VIDEO_MJPEG, "Motion JPEG 4:2:2", AV_CODEC_ID_MJPEG, AV_PIX_FMT_YUVJ422P, 320, 240, 15, 1500000, 15},
 };
 
 /* Bounded bit reader for the specific MPEG-4 Simple Profile packets generated
@@ -160,46 +140,73 @@ static bool locate_rounding_bit(const uint8_t *data, size_t len, int fps,
     return true;
 }
 
-static const struct retro_video_preset *find_preset(enum retro_video_codec codec)
-{
-	for (size_t i = 0; i < sizeof(presets) / sizeof(presets[0]); ++i)
-		if (presets[i].kind == codec)
-			return &presets[i];
-	return NULL;
-}
-
 struct retro_video_options retro_video_default_options(enum retro_video_codec codec)
 {
-	const struct retro_video_preset *preset = find_preset(codec);
-	if (!preset)
-		return (struct retro_video_options){0};
-	return (struct retro_video_options){.codec = codec,
-					    .width = preset->width,
-					    .height = preset->height,
-					    .fps = preset->fps,
-					    .bitrate = preset->bitrate,
-					    .gop_size = preset->gop};
+    if(codec!=RETRO_VIDEO_MPEG4_PART2)return (struct retro_video_options){0};
+    return (struct retro_video_options){.codec=codec,.width=176,.height=144,
+        .fps=10,.bitrate=64000,.gop_size=30,.mosh_mv_x=100,.mosh_mv_y=100,.mosh_residual=100};
 }
 
-const char *retro_video_codec_name(enum retro_video_codec codec)
+/* SplitMix64: local deterministic state, no process-global rand() or
+ * shared mutable PRNG. This is creative randomness, not cryptography. */
+static unsigned roll(uint64_t *seed,unsigned count)
 {
-	const struct retro_video_preset *preset = find_preset(codec);
-	return preset ? preset->name : NULL;
+    uint64_t z=(*seed+=UINT64_C(0x9e3779b97f4a7c15));
+    z=(z^(z>>30))*UINT64_C(0xbf58476d1ce4e5b9);
+    z=(z^(z>>27))*UINT64_C(0x94d049bb133111eb);
+    return (unsigned)((z^(z>>31))%count);
+}
+static int operation_family(unsigned op)
+{
+    return op<2?0:op<6?1:2;
+}
+static void choose_operation(struct retro_video_options *o,unsigned op)
+{
+    if(op<2) o->mosh_reference=RETRO_REFERENCE_SKIP+(int)op;
+    else if(op<6) o->mosh_predictive=RETRO_PREDICTIVE_DROP+(int)(op-2);
+    else o->mosh_layers|=1u<<(op-6);
+}
+struct retro_video_options retro_video_random_instrument(uint64_t seed)
+{
+    struct retro_video_options o=retro_video_default_options(RETRO_VIDEO_MPEG4_PART2);
+    o.mosh_mode=RETRO_MOSH_INSTRUMENT;
+    /* One or two non-conflicting operations, never a completely clean roll. */
+    unsigned primary=roll(&seed,10);
+    choose_operation(&o,primary);
+    if(roll(&seed,4)!=0) {
+        unsigned choices[9],n=0;
+        for(unsigned op=0;op<10;op++)
+            if(op!=primary && (operation_family(primary)==2 ||
+                operation_family(op)!=operation_family(primary))) choices[n++]=op;
+        choose_operation(&o,choices[roll(&seed,n)]);
+    }
+    static const int heights[]={144,192,288},widths[]={256,336,512};
+    static const int rates[]={12,15,18,24},gops[]={12,16,20,24};
+    unsigned size=roll(&seed,3);
+    o.height=heights[size];o.width=widths[size];
+    o.fps=rates[roll(&seed,4)];o.gop_size=gops[roll(&seed,4)];
+    o.bitrate=(160+10*(int)roll(&seed,50))*1000;
+    o.mosh_skip_keyframes=1+(int)roll(&seed,2);
+    o.mosh_anchor_span=2+(int)roll(&seed,3);
+    o.mosh_p_interval=4+(int)roll(&seed,9);
+    o.mosh_p_burst=1+(int)roll(&seed,(unsigned)(o.mosh_p_interval/2));
+    o.mosh_rewind_depth=2+(int)roll(&seed,5);
+    o.mosh_rounding_interval=1+(int)roll(&seed,6);
+    o.mosh_mv_x=-150+5*(int)roll(&seed,81);
+    o.mosh_mv_y=-150+5*(int)roll(&seed,81);
+    o.mosh_residual=30+5*(int)roll(&seed,17);
+    o.mosh_residual_loss=(int)roll(&seed,31);
+    o.mosh_vector_strength=80+10*(int)roll(&seed,18);
+    o.mosh_vector_persistence=25+5*(int)roll(&seed,11);
+    o.mosh_slice_history=2+(int)roll(&seed,5);
+    o.mosh_slice_height=4+(int)roll(&seed,21);
+    return o;
 }
 
-bool retro_video_supported_size(enum retro_video_codec codec, int width, int height)
+bool retro_video_supported_size(enum retro_video_codec codec,int width,int height)
 {
-	if (codec == RETRO_VIDEO_H263)
-		return (width == 128 && height == 96) || (width == 176 && height == 144) ||
-		       (width == 352 && height == 288) || (width == 704 && height == 576) ||
-		       (width == 1408 && height == 1152);
-	if (codec == RETRO_VIDEO_MPEG4_PART2)
-		return width >= 16 && height >= 16 && width <= 2048 && height <= 2048 && width % 16 == 0 &&
-		       height % 16 == 0;
-	if (find_preset(codec))
-		return width >= 16 && height >= 16 && width <= 2048 && height <= 2048 && width % 4 == 0 &&
-		       height % 4 == 0;
-	return false;
+    return codec==RETRO_VIDEO_MPEG4_PART2 && width>=16 && height>=16 &&
+        width<=2048 && height<=2048 && width%16==0 && height%16==0;
 }
 
 void retro_video_destroy(struct retro_video *ctx)
@@ -224,45 +231,52 @@ void retro_video_destroy(struct retro_video *ctx)
 
 struct retro_video *retro_video_create(const struct retro_video_options *options)
 {
-	if (!options || !retro_video_supported_size(options->codec, options->width, options->height) ||
-	    options->fps < 1 || options->fps > 60 || options->bitrate < 1000 || options->bitrate > 20000000 ||
-	    options->gop_size < 1 || options->gop_size > 1000 ||
-	    options->mosh_skip_keyframes < 0 || options->mosh_skip_keyframes > 16 ||
-        options->mosh_mode < RETRO_MOSH_KEYFRAME_SKIP || options->mosh_mode > RETRO_MOSH_FRAME_PEEL ||
-        (options->mosh_mode >= RETRO_MOSH_PFRAME_DROP && options->mosh_mode <= RETRO_MOSH_PFRAME_ECHO &&
-         (options->mosh_p_interval < 2 || options->mosh_p_interval > 60)) ||
-        (options->mosh_mode == RETRO_MOSH_PFRAME_BURST &&
-         (options->mosh_p_burst < 1 || options->mosh_p_burst >= options->mosh_p_interval)) ||
-        options->mosh_vector_strength < 0 || options->mosh_vector_strength > 500 ||
-        options->mosh_vector_persistence < 0 || options->mosh_vector_persistence > 100 ||
-        (options->mosh_mode == RETRO_MOSH_MOTION_SHIMMER &&
-         (options->mosh_rounding_interval < 1 || options->mosh_rounding_interval > 60)) ||
-        (options->mosh_mode == RETRO_MOSH_KEYFRAME_ANCHOR &&
-         (options->mosh_anchor_span < 2 || options->mosh_anchor_span > 12)) ||
-        (options->mosh_mode == RETRO_MOSH_PFRAME_REWIND &&
-         (options->mosh_rewind_depth < 2 || options->mosh_rewind_depth > 12)) ||
-        (options->mosh_mode == RETRO_MOSH_FRAME_PEEL &&
-         (options->mosh_slice_history < 2 || options->mosh_slice_history > 8 ||
-          options->mosh_slice_height < 1 || options->mosh_slice_height > 64)) ||
-        ((options->mosh_skip_keyframes > 0 || options->mosh_mode != RETRO_MOSH_KEYFRAME_SKIP) &&
-         options->codec != RETRO_VIDEO_MPEG4_PART2))
-		return NULL;
+    if (!options || !retro_video_supported_size(options->codec, options->width, options->height) ||
+        options->fps < 1 || options->fps > 60 || options->bitrate < 1000 || options->bitrate > 20000000 ||
+        options->gop_size < 1 || options->gop_size > 1000 ||
+        options->mosh_mode < RETRO_MOSH_KEYFRAME_SKIP || options->mosh_mode > RETRO_MOSH_INSTRUMENT)
+        return NULL;
+    enum retro_reference reference=RETRO_REFERENCE_LIVE;
+    enum retro_predictive predictive=RETRO_PREDICTIVE_LIVE;
+    unsigned layers=0;
+    switch (options->mosh_mode) {
+        case RETRO_MOSH_KEYFRAME_SKIP: reference=RETRO_REFERENCE_SKIP; break;
+        case RETRO_MOSH_PFRAME_DROP: predictive=RETRO_PREDICTIVE_DROP; break;
+        case RETRO_MOSH_PFRAME_BURST: predictive=RETRO_PREDICTIVE_BURST; break;
+        case RETRO_MOSH_PFRAME_ECHO: predictive=RETRO_PREDICTIVE_ECHO; break;
+        case RETRO_MOSH_PFRAME_REWIND: predictive=RETRO_PREDICTIVE_REWIND; break;
+        case RETRO_MOSH_KEYFRAME_ANCHOR: reference=RETRO_REFERENCE_ANCHOR; break;
+        case RETRO_MOSH_VECTOR_DRIFT: layers=RETRO_LAYER_FLOW; break;
+        case RETRO_MOSH_FRAME_PEEL: layers=RETRO_LAYER_PEEL; break;
+        case RETRO_MOSH_MOTION_SHIMMER: layers=RETRO_LAYER_SHIMMER; break;
+        case RETRO_MOSH_INSTRUMENT: reference=options->mosh_reference; predictive=options->mosh_predictive;
+            layers=options->mosh_layers; break;
+    }
+    if (reference<RETRO_REFERENCE_LIVE || reference>RETRO_REFERENCE_ANCHOR ||
+        predictive<RETRO_PREDICTIVE_LIVE || predictive>RETRO_PREDICTIVE_REWIND ||
+        (layers & ~(RETRO_LAYER_FLOW|RETRO_LAYER_PEEL|RETRO_LAYER_SHIMMER|RETRO_LAYER_COMPRESSED)) ||
+        ((layers&RETRO_LAYER_COMPRESSED) &&
+         (options->mosh_mv_x< -500 || options->mosh_mv_x>500 ||
+          options->mosh_mv_y< -500 || options->mosh_mv_y>500 ||
+          options->mosh_residual< -200 || options->mosh_residual>200 ||
+          options->mosh_residual_loss<0 || options->mosh_residual_loss>100)) ||
+        options->mosh_skip_keyframes < 0 || options->mosh_skip_keyframes > 16 ||
+        (predictive>=RETRO_PREDICTIVE_DROP && predictive<=RETRO_PREDICTIVE_ECHO &&
+         (options->mosh_p_interval<2 || options->mosh_p_interval>60)) ||
+        (predictive==RETRO_PREDICTIVE_BURST && (options->mosh_p_burst<1 || options->mosh_p_burst>=options->mosh_p_interval)) ||
+        options->mosh_vector_strength<0 || options->mosh_vector_strength>500 ||
+        options->mosh_vector_persistence<0 || options->mosh_vector_persistence>100 ||
+        ((layers&RETRO_LAYER_SHIMMER) && (options->mosh_rounding_interval<1 || options->mosh_rounding_interval>60)) ||
+        (reference==RETRO_REFERENCE_ANCHOR && (options->mosh_anchor_span<2 || options->mosh_anchor_span>12)) ||
+        (predictive==RETRO_PREDICTIVE_REWIND && (options->mosh_rewind_depth<2 || options->mosh_rewind_depth>12)) ||
+        ((layers&RETRO_LAYER_PEEL) && (options->mosh_slice_history<2 || options->mosh_slice_history>8 ||
+         options->mosh_slice_height<1 || options->mosh_slice_height>64))) {
+        return NULL;
+    }
 
-	const struct retro_video_preset *preset = find_preset(options->codec);
-	if (!preset)
-		return NULL;
-	const AVCodec *encoder = avcodec_find_encoder(preset->avcodec);
-	const AVCodec *decoder = avcodec_find_decoder(preset->avcodec);
-	if (encoder && encoder->pix_fmts) {
-		bool format_supported = false;
-		for (const enum AVPixelFormat *fmt = encoder->pix_fmts; *fmt != AV_PIX_FMT_NONE; ++fmt)
-			if (*fmt == preset->input_format)
-				format_supported = true;
-		if (!format_supported)
-			return NULL;
-	}
-	if (!encoder || !decoder)
-		return NULL;
+    const AVCodec *encoder=avcodec_find_encoder(AV_CODEC_ID_MPEG4);
+    const AVCodec *decoder=avcodec_find_decoder(AV_CODEC_ID_MPEG4);
+    if(!decoder||!retro_encoder_supports_format(encoder,AV_PIX_FMT_YUV420P))return NULL;
 
 	struct retro_video *ctx = calloc(1, sizeof(*ctx));
 	if (!ctx)
@@ -277,7 +291,9 @@ struct retro_video *retro_video_create(const struct retro_video_options *options
 		goto error;
 
 	ctx->mosh_skip_keyframes = options->mosh_skip_keyframes;
-    ctx->mosh_mode = options->mosh_mode;
+    ctx->reference=reference; ctx->predictive=predictive; ctx->layers=layers;
+    ctx->editor=(struct mpeg4_edit_options){options->width,options->height,options->fps,
+        options->mosh_mv_x, options->mosh_mv_y, options->mosh_residual, options->mosh_residual_loss,0};
     ctx->p_interval = options->mosh_p_interval;
     ctx->p_burst = options->mosh_p_burst;
     ctx->rounding_interval = options->mosh_rounding_interval;
@@ -285,7 +301,7 @@ struct retro_video *retro_video_create(const struct retro_video_options *options
     ctx->rewind_depth = options->mosh_rewind_depth;
     ctx->slice_history = options->mosh_slice_history;
     ctx->slice_height = options->mosh_slice_height;
-    if (ctx->mosh_mode == RETRO_MOSH_PFRAME_REWIND) {
+    if (ctx->predictive == RETRO_PREDICTIVE_REWIND) {
         ctx->rewind_incoming = av_packet_alloc();
         if (!ctx->rewind_incoming) goto error;
         for (int i = 0; i < ctx->rewind_depth; ++i) {
@@ -293,7 +309,7 @@ struct retro_video *retro_video_create(const struct retro_video_options *options
             if (!ctx->rewind_packets[i]) goto error;
         }
     }
-    if (ctx->mosh_mode == RETRO_MOSH_FRAME_PEEL) {
+    if ((ctx->layers & RETRO_LAYER_PEEL)) {
         const size_t bytes = (size_t)options->width * (size_t)options->height * 4;
         /* A generic high-resolution API caller must not create a huge
          * unbounded feedback allocation; OBS's codec is only 144px high. */
@@ -302,63 +318,32 @@ struct retro_video *retro_video_create(const struct retro_video_options *options
         ctx->slice_frames = calloc(ctx->slice_history, bytes);
         if (!ctx->slice_frames) goto error;
     }
-    if (ctx->mosh_mode == RETRO_MOSH_KEYFRAME_ANCHOR) {
+    if (options->codec == RETRO_VIDEO_MPEG4_PART2) {
         ctx->anchor_packet = av_packet_alloc();
         if (!ctx->anchor_packet) goto error;
     }
     ctx->flow_strength = options->mosh_vector_strength;
     ctx->flow_persistence = options->mosh_vector_persistence;
-    if (ctx->mosh_mode == RETRO_MOSH_VECTOR_DRIFT) {
+    if ((ctx->layers & RETRO_LAYER_FLOW)) {
         ctx->flow_previous = calloc((size_t)options->width * options->height * 4, 1);
         if (!ctx->flow_previous) goto error;
         ctx->decoder->flags2 |= AV_CODEC_FLAG2_EXPORT_MVS;
     }
-    if (ctx->mosh_mode == RETRO_MOSH_PFRAME_ECHO) {
+    if (ctx->predictive == RETRO_PREDICTIVE_ECHO) {
         ctx->echo_packet = av_packet_alloc();
         if (!ctx->echo_packet) goto error;
     }
 	ctx->encoder->width = options->width;
 	ctx->encoder->height = options->height;
-	ctx->encoder->pix_fmt = preset->input_format;
-	ctx->encode_pixel_format = preset->input_format;
+	ctx->encoder->pix_fmt = AV_PIX_FMT_YUV420P;
 	ctx->encoder->time_base = (AVRational){1, options->fps};
 	ctx->encoder->framerate = (AVRational){options->fps, 1};
 	ctx->encoder->bit_rate = options->bitrate;
 	ctx->encoder->gop_size = options->gop_size;
 	ctx->encoder->max_b_frames = 0;
-	/* Only expose parameters implemented by the selected encoder. */
-	if (options->codec == RETRO_VIDEO_CINEPAK) {
-		if (options->cinepak_codebook_passes < 0 || options->cinepak_codebook_passes > 5 ||
-		    av_opt_set_int(ctx->encoder->priv_data, "max_extra_cb_iterations", options->cinepak_codebook_passes,
-				   0) < 0)
-			goto error;
-	} else if (options->codec == RETRO_VIDEO_SVQ1) {
-		if (options->svq1_motion_estimation < 0 || options->svq1_motion_estimation > 2 ||
-		    av_opt_set_int(ctx->encoder->priv_data, "motion-est", options->svq1_motion_estimation, 0) < 0)
-			goto error;
-	} else if (options->codec == RETRO_VIDEO_MJPEG) {
-		int q = options->mjpeg_quantizer ? options->mjpeg_quantizer : 5;
-		if (q < 2 || q > 31)
-			goto error;
-		ctx->encoder->flags |= AV_CODEC_FLAG_QSCALE;
-		ctx->encoder->global_quality = FF_QP2LAMBDA * q;
-	}
-	/* MJPEG has full-range image chroma; RGB-family codecs do not use YUV
-	 * conversion at all. This is actual encoder input, not a lookalike pass. */
-	if (options->codec == RETRO_VIDEO_MJPEG)
-		ctx->encoder->color_range = AVCOL_RANGE_JPEG;
-	if (options->codec == RETRO_VIDEO_MPEG1)
-		ctx->encoder->sample_aspect_ratio = (AVRational){12, 11};
-	if (options->codec == RETRO_VIDEO_MPEG4_PART2) {
-		ctx->encoder->profile = FF_PROFILE_MPEG4_SIMPLE;
-		/* An explicit QCIF 4:3 sample aspect (12:11) in MPEG-4 VOL.
-		 * Larger square-pixel modes use 1:1. */
-		ctx->encoder->sample_aspect_ratio =
-			options->width == 176 && options->height == 144 ? (AVRational){12, 11} : (AVRational){1, 1};
-	}
-
-	/* AVI-era codecs such as Cinepak can require frame dimensions from the
-	 * container header; our in-memory round-trip has no container. */
+    ctx->encoder->profile=RETRO_MPEG4_SIMPLE_PROFILE;
+    ctx->encoder->sample_aspect_ratio=options->width==176 && options->height==144 ?
+        (AVRational){12,11}:(AVRational){1,1};
 	ctx->decoder->width = options->width;
 	ctx->decoder->height = options->height;
 	if (avcodec_open2(ctx->encoder, encoder, NULL) < 0 || avcodec_open2(ctx->decoder, decoder, NULL) < 0)
@@ -366,27 +351,50 @@ struct retro_video *retro_video_create(const struct retro_video_options *options
 
 	ctx->input->width = options->width;
 	ctx->input->height = options->height;
-	ctx->input->format = preset->input_format;
+	ctx->input->format = AV_PIX_FMT_YUV420P;
 	ctx->input->color_range = ctx->encoder->color_range;
 	if (av_frame_get_buffer(ctx->input, 32) < 0)
 		goto error;
 
-	/* RGB555 is a packed, non-subsampled RGB pixel format. libswscale
-	 * currently reports an unsupported full-chroma interpolation path when
-	 * RGBA is sent directly to RGB555LE. Pack the 15-bit pixels ourselves,
-	 * retaining the actual pixel layout required by Microsoft Video 1. */
-	if (options->codec != RETRO_VIDEO_MSVIDEO1) {
-		ctx->rgba_to_yuv = sws_getContext(options->width, options->height, AV_PIX_FMT_RGBA, options->width,
-						  options->height, preset->input_format, SWS_BILINEAR, NULL, NULL,
-						  NULL);
-		if (!ctx->rgba_to_yuv)
-			goto error;
-	}
+    ctx->rgba_to_yuv=sws_getContext(options->width,options->height,AV_PIX_FMT_RGBA,
+        options->width,options->height,AV_PIX_FMT_YUV420P,SWS_BILINEAR,NULL,NULL,NULL);
+    if(!ctx->rgba_to_yuv)goto error;
 
 	return ctx;
 error:
 	retro_video_destroy(ctx);
 	return NULL;
+}
+
+bool retro_video_set_live_options(struct retro_video *ctx,const struct retro_video_options *o)
+{
+    if(!ctx||!o||o->mosh_skip_keyframes<0||o->mosh_skip_keyframes>16||
+       (ctx->predictive>=RETRO_PREDICTIVE_DROP&&ctx->predictive<=RETRO_PREDICTIVE_ECHO&&
+        (o->mosh_p_interval<2||o->mosh_p_interval>60))||
+       (ctx->predictive==RETRO_PREDICTIVE_BURST&&(o->mosh_p_burst<1||o->mosh_p_burst>=o->mosh_p_interval))||
+       (ctx->reference==RETRO_REFERENCE_ANCHOR&&(o->mosh_anchor_span<2||o->mosh_anchor_span>12))||
+       (ctx->layers&RETRO_LAYER_SHIMMER&&(o->mosh_rounding_interval<1||o->mosh_rounding_interval>60))||
+       (ctx->layers&RETRO_LAYER_PEEL&&(o->mosh_slice_height<1||o->mosh_slice_height>64))||
+       o->mosh_vector_strength<0||o->mosh_vector_strength>500||
+       o->mosh_vector_persistence<0||o->mosh_vector_persistence>100||
+       (ctx->layers&RETRO_LAYER_COMPRESSED&&(o->mosh_mv_x< -500||o->mosh_mv_x>500||
+        o->mosh_mv_y< -500||o->mosh_mv_y>500||o->mosh_residual< -200||o->mosh_residual>200||
+        o->mosh_residual_loss<0||o->mosh_residual_loss>100)))return false;
+    ctx->mosh_skip_keyframes=o->mosh_skip_keyframes;ctx->p_interval=o->mosh_p_interval;
+    ctx->p_burst=o->mosh_p_burst;ctx->anchor_span=o->mosh_anchor_span;
+    ctx->rounding_interval=o->mosh_rounding_interval;ctx->slice_height=o->mosh_slice_height;
+    ctx->flow_strength=o->mosh_vector_strength;ctx->flow_persistence=o->mosh_vector_persistence;
+    ctx->editor.x_scale=o->mosh_mv_x;ctx->editor.y_scale=o->mosh_mv_y;
+    ctx->editor.residual_scale=o->mosh_residual;ctx->editor.residual_loss=o->mosh_residual_loss;
+    return true;
+}
+
+void retro_video_set_anchor_hold(struct retro_video *ctx, bool hold)
+{
+    if (!ctx || !ctx->anchor_packet) return;
+    if (ctx->hold && !hold) ctx->release_anchor=true;
+    if (hold) ctx->release_anchor=false;
+    ctx->hold=hold;
 }
 
 int retro_video_process(struct retro_video *ctx, const uint8_t *rgba, int input_stride, uint8_t *decoded,
@@ -399,33 +407,12 @@ int retro_video_process(struct retro_video *ctx, const uint8_t *rgba, int input_
 	if (av_frame_make_writable(ctx->input) < 0)
 		return -1;
 
-	if (ctx->encode_pixel_format == AV_PIX_FMT_RGB555LE) {
-		for (int y = 0; y < ctx->encoder->height; ++y) {
-			const uint8_t *row = rgba + (size_t)y * (size_t)input_stride;
-			uint8_t *target = ctx->input->data[0] + (size_t)y * (size_t)ctx->input->linesize[0];
-			for (int x = 0; x < ctx->encoder->width; ++x) {
-				const uint8_t *px = row + (size_t)x * 4;
-				/* Round 8-bit RGB to 5 bits/channel. Little-endian packed RGB555:
-				 * bits 10..14 = red, 5..9 = green, 0..4 = blue. */
-				uint16_t red = ((uint16_t)px[0] * 31 + 127) / 255;
-				uint16_t green = ((uint16_t)px[1] * 31 + 127) / 255;
-				uint16_t blue = ((uint16_t)px[2] * 31 + 127) / 255;
-				uint16_t packed = (uint16_t)((red << 10) | (green << 5) | blue);
-				target[2 * x] = (uint8_t)(packed & 0xff);
-				target[2 * x + 1] = (uint8_t)(packed >> 8);
-			}
-		}
-	} else {
-		const uint8_t *source[4] = {rgba, NULL, NULL, NULL};
-		int strides[4] = {input_stride, 0, 0, 0};
-		if (sws_scale(ctx->rgba_to_yuv, source, strides, 0, ctx->encoder->height, ctx->input->data,
-			      ctx->input->linesize) != ctx->encoder->height)
-			return -1;
-	}
-
-	if (ctx->encoder->codec_id == AV_CODEC_ID_MJPEG && (ctx->encoder->flags & AV_CODEC_FLAG_QSCALE))
-		ctx->input->quality = ctx->encoder->global_quality;
+    const uint8_t *source[4]={rgba,NULL,NULL,NULL};
+    int strides[4]={input_stride,0,0,0};
+    if(sws_scale(ctx->rgba_to_yuv,source,strides,0,ctx->encoder->height,
+                 ctx->input->data,ctx->input->linesize)!=ctx->encoder->height)return -1;
 	ctx->input->pts = ctx->pts++;
+    ctx->input->pict_type = ctx->release_anchor ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
 	if (avcodec_send_frame(ctx->encoder, ctx->input) < 0)
 		return -1;
 
@@ -443,12 +430,12 @@ int retro_video_process(struct retro_video *ctx, const uint8_t *rgba, int input_
 		 * Always admit the very first keyframe to establish a reference. */
         const bool is_key = (ctx->packet->flags & AV_PKT_FLAG_KEY) != 0;
         if (is_key && ctx->echo_packet) av_packet_unref(ctx->echo_packet);
-        if (is_key && ctx->mosh_mode == RETRO_MOSH_PFRAME_REWIND) {
+        if (is_key && ctx->predictive == RETRO_PREDICTIVE_REWIND) {
             for (int i = 0; i < ctx->rewind_depth; ++i)
                 av_packet_unref(ctx->rewind_packets[i]);
             ctx->rewind_seen = 0;
         }
-        if (ctx->mosh_mode == RETRO_MOSH_KEYFRAME_SKIP &&
+        if (ctx->reference == RETRO_REFERENCE_SKIP && !ctx->hold && !ctx->release_anchor &&
             (ctx->packet->flags & AV_PKT_FLAG_KEY) && ctx->has_decoder_reference) {
 			if (ctx->mosh_skip_keyframes > 0 &&
 			    ctx->skipped_in_cycle < ctx->mosh_skip_keyframes) {
@@ -466,8 +453,11 @@ int retro_video_process(struct retro_video *ctx, const uint8_t *rgba, int input_
          * decoder's reference picture now comes from an earlier instant.
          * Refresh the anchor after a bounded number of keyframes.
          * Only MPEG-4 Simple Profile generated by the same encoder is used. */
-        if (is_key && ctx->mosh_mode == RETRO_MOSH_KEYFRAME_ANCHOR) {
-            const bool refresh = ctx->anchor_keyframes_seen % (uint64_t)ctx->anchor_span == 0;
+        if (is_key && ctx->anchor_packet) {
+            const bool scheduled = ctx->reference == RETRO_REFERENCE_ANCHOR;
+            const bool refresh = !ctx->anchor_packet->buf || ctx->release_anchor ||
+                (!ctx->hold && (!scheduled || ctx->anchor_keyframes_seen % (uint64_t)ctx->anchor_span == 0));
+            ctx->release_anchor=false;
             ctx->anchor_keyframes_seen++;
             if (refresh) {
                 av_packet_unref(ctx->anchor_packet);
@@ -491,21 +481,21 @@ int retro_video_process(struct retro_video *ctx, const uint8_t *rgba, int input_
         }
 
         if (!is_key && ctx->has_decoder_reference &&
-            ctx->mosh_mode >= RETRO_MOSH_PFRAME_DROP &&
-            ctx->mosh_mode <= RETRO_MOSH_PFRAME_ECHO) {
+            ctx->predictive >= RETRO_PREDICTIVE_DROP &&
+            ctx->predictive <= RETRO_PREDICTIVE_ECHO) {
             ctx->p_seen++;
             const uint64_t interval = (uint64_t)ctx->p_interval;
             bool drop = false;
-            if (ctx->mosh_mode == RETRO_MOSH_PFRAME_DROP)
+            if (ctx->predictive == RETRO_PREDICTIVE_DROP)
                 drop = ctx->p_seen % interval == 0;
-            else if (ctx->mosh_mode == RETRO_MOSH_PFRAME_BURST)
+            else if (ctx->predictive == RETRO_PREDICTIVE_BURST)
                 drop = (ctx->p_seen - 1) % interval < (uint64_t)ctx->p_burst;
             if (drop) {
                 ctx->dropped_pframes++;
                 av_packet_unref(ctx->packet);
                 continue;
             }
-            if (ctx->mosh_mode == RETRO_MOSH_PFRAME_ECHO) {
+            if (ctx->predictive == RETRO_PREDICTIVE_ECHO) {
                 if (ctx->p_seen % interval == 0 && ctx->echo_packet->buf) {
                     /* Substitute compressed P-frame motion, not raw pixels.
                      * Preserve the current slot's packet metadata; only the
@@ -532,7 +522,7 @@ int retro_video_process(struct retro_video *ctx, const uint8_t *rgba, int input_
          * ring. Each later P is substituted with the packet N P frames ago.
          * Cache the *unmodified* incoming packet, not a re-replayed packet.
          * All packet timestamps are mapped to the current output slot. */
-        if (!is_key && ctx->mosh_mode == RETRO_MOSH_PFRAME_REWIND &&
+        if (!is_key && ctx->predictive == RETRO_PREDICTIVE_REWIND &&
             ctx->has_decoder_reference) {
             const int slot_index = (int)(ctx->rewind_seen % (uint64_t)ctx->rewind_depth);
             AVPacket *old = ctx->rewind_packets[slot_index];
@@ -563,7 +553,7 @@ int retro_video_process(struct retro_video *ctx, const uint8_t *rgba, int input_
         /* Rounding is a one-bit, length-preserving MPEG-4 motion
          * interpolation decision, unlike variable-length motion vectors.
          * Only edit valid P-VOP headers emitted by our own encoder. */
-        if (!is_key && ctx->mosh_mode == RETRO_MOSH_MOTION_SHIMMER) {
+        if (!is_key && (ctx->layers & RETRO_LAYER_SHIMMER)) {
             ctx->rounding_p_seen++;
             if ((ctx->rounding_p_seen - 1) % (uint64_t)ctx->rounding_interval == 0) {
                 size_t byte = 0;
@@ -577,6 +567,24 @@ int retro_video_process(struct retro_video *ctx, const uint8_t *rgba, int input_
                     ctx->packet->data[byte] ^= mask;
                     ctx->rounding_flips++;
                 }
+            }
+        }
+        if (!is_key && (ctx->layers&RETRO_LAYER_COMPRESSED)) {
+            uint8_t *bytes=NULL;size_t size=0;struct mpeg4_edit_stats stats;
+            ctx->editor.seed=(uint32_t)ctx->packets;
+            int edit=mpeg4_edit_p_vop(ctx->packet->data,(size_t)ctx->packet->size,
+                &ctx->editor,&bytes,&size,&stats);
+            if(edit<0)ctx->edit_unsupported++;
+            if(edit==1) {
+                AVPacket *replacement=av_packet_alloc();
+                if(!replacement || av_new_packet(replacement,(int)size)<0 ||
+                   av_packet_copy_props(replacement,ctx->packet)<0) {
+                    free(bytes);av_packet_free(&replacement);av_packet_unref(ctx->packet);return -1;
+                }
+                memcpy(replacement->data,bytes,size);free(bytes);
+                av_packet_unref(ctx->packet);av_packet_move_ref(ctx->packet,replacement);av_packet_free(&replacement);
+                ctx->edited_packets++;ctx->edited_vectors+=stats.vectors;
+                ctx->edited_coefficients+=stats.coefficients;ctx->edited_blocks+=stats.blocks;
             }
         }
         if (avcodec_send_packet(ctx->decoder, ctx->packet) < 0) {
@@ -603,7 +611,7 @@ int retro_video_process(struct retro_video *ctx, const uint8_t *rgba, int input_
 				av_frame_unref(ctx->decoded);
 				return -1;
 			}
-            if (ctx->mosh_mode == RETRO_MOSH_FRAME_PEEL) {
+            if ((ctx->layers & RETRO_LAYER_PEEL)) {
                 const int w = ctx->decoded->width;
                 const int h = ctx->decoded->height;
                 const size_t row_bytes = (size_t)w * 4;
@@ -627,7 +635,7 @@ int retro_video_process(struct retro_video *ctx, const uint8_t *rgba, int input_
                 }
                 ctx->slice_next = (newest + 1) % ctx->slice_history;
             }
-            if (ctx->mosh_mode == RETRO_MOSH_VECTOR_DRIFT) {
+            if ((ctx->layers & RETRO_LAYER_FLOW)) {
                 const int width = ctx->decoded->width;
                 const int height = ctx->decoded->height;
                 const AVFrameSideData *side = av_frame_get_side_data(ctx->decoded, AV_FRAME_DATA_MOTION_VECTORS);
@@ -777,3 +785,9 @@ uint64_t retro_video_temporal_rows_reused(const struct retro_video *ctx)
 {
     return ctx ? ctx->slice_reused_rows : 0;
 }
+
+uint64_t retro_video_compressed_packets(const struct retro_video *s){return s?s->edited_packets:0;}
+uint64_t retro_video_compressed_vectors(const struct retro_video *s){return s?s->edited_vectors:0;}
+uint64_t retro_video_compressed_coefficients(const struct retro_video *s){return s?s->edited_coefficients:0;}
+uint64_t retro_video_compressed_blocks(const struct retro_video *s){return s?s->edited_blocks:0;}
+uint64_t retro_video_compressed_unsupported(const struct retro_video *s){return s?s->edit_unsupported:0;}

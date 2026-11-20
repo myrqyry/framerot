@@ -90,7 +90,7 @@ int main(void)
     o.mosh_rewind_depth = 13;
     assert(retro_video_create(&o) == NULL);
     o.mosh_rewind_depth = 4;
-    o.codec = RETRO_VIDEO_H263;
+    o.codec = (enum retro_video_codec)1;
     assert(retro_video_create(&o) == NULL);
     o.codec = RETRO_VIDEO_MPEG4_PART2;
     o.mosh_mode = RETRO_MOSH_FRAME_PEEL;
