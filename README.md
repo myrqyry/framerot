@@ -19,7 +19,6 @@ Instrument is the default: combine effects, play with their controls, or discove
   </tr>
   <tr>
     <td align="center"><img src="assets/showcase/clean.webp" alt="Original" width="300"></td>
-    <td align="center"><img src="assets/showcase/before-after.webp" alt="Before / After" width="300"></td>
     <td align="center"><img src="assets/showcase/instrument.webp" alt="Instrument" width="300"></td>
   </tr>
   <tr>
