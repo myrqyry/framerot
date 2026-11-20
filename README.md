@@ -14,7 +14,6 @@ Instrument is the default: combine effects, play with their controls, or discove
 <table>
   <tr>
     <th>Original</th>
-    <th>Before / After</th>
     <th>Instrument</th>
   </tr>
   <tr>
