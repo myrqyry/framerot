@@ -1,7 +1,5 @@
 # framerot
 
-**Break the frame. Keep the motion.**
-
 A native OBS Studio datamoshing and video-decay filter. Turn moving footage into lingering images, smeared motion, temporal ribbons and crunchy vintage compression — using real video codecs rather than a simulated glitch shader.
 
 Instrument is the default: combine effects, play with their controls, or discover a new combination with the randomizer.
