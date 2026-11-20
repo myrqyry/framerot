@@ -17,8 +17,8 @@ Instrument is the default: combine effects, play with their controls, or discove
     <th>Instrument</th>
   </tr>
   <tr>
-    <td align="center"><img src="assets/showcase/clean.webp" alt="Original" width="300"></td>
-    <td align="center"><img src="assets/showcase/instrument.webp" alt="Instrument" width="300"></td>
+    <td align="center"><img src="assets/showcase/clean.webp" alt="Original" width="450"></td>
+    <td align="center"><img src="assets/showcase/instrument.webp" alt="Instrument" width="450"></td>
   </tr>
   <tr>
     <th>Memory Melt</th>
