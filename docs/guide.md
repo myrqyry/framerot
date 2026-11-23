@@ -25,7 +25,7 @@ To remove it, close OBS and move the framerot plugin folder out of the plugin se
 
 ## Your first datamosh
 
-Start with a webcam or a video containing moving objects and hard cuts. A static image may show compression but little temporal decay. Add framerot and let the default Instrument combination run for a few seconds.
+Start with a webcam or a video containing moving objects and hard cuts. For a textured static image, select the **Phantom Drift — animate stills** starting point under Instrument; otherwise static images may show little temporal decay. Add framerot and let the default Instrument combination run for a few seconds.
 
 Try reducing Wet mix to 50%, then move it back to 100%. Change the horizontal motion delta while moving the camera. Hold a reference, move around, and release it to see a fresh image. Switch on Frame Peel to layer in horizontal bands from earlier decoded frames.
 
@@ -59,12 +59,12 @@ Interval is 2–60 frames; burst length is 1–30 but always constrained below t
 
 | Layer | Controls | Creative use |
 | --- | --- | --- |
-| Packet editing | Motion delta X/Y (−500–500%), residual strength (−200–200%), block loss (0–100%). | 100% motion and residual strength are neutral; try negative motion for reversed deltas or lower residual strength for lingering detail. |
+| Packet editing | Motion delta X/Y (−500–500%), residual strength (−200–200%), block loss (0–100%), Phantom Drift (0–100%), spectral low/mid/high scan changes (−100 to +200%). | The spectral controls adjust three ranges of *encoded inter-residual coefficients* separately. Try high −100% to erase fine detail or high +100% for crunchy ringing. |
 | Flow Drift | Motion exaggeration (0–500%), persistence (0–100%). | Raise persistence for more previous-frame feedback. Zero in either control disables the Flow contribution. |
 | Frame Peel | History (2–8 frames), band height (1–64 codec pixels). | Smaller bands create finer strips; larger history samples older frames. |
 | Motion Shimmer | Edit every N P-frames (1–60). | A comparatively subtle change in how the codec interpolates motion. |
 
-Packet editing works on actual encoded motion **deltas**, not an absolute optical-flow field. Neutral packet editing is X/Y 100%, residual strength 100%, block loss 0%.
+Packet editing works on actual encoded motion **deltas**, not an absolute optical-flow field. Neutral settings are X/Y 100%, residual strength 100%, block loss 0%, Phantom Drift 0% and spectral low/mid/high 0%. **Spectral scan bands** refer to quantized coefficient positions 0–9 (low), 10–31 (middle), 32–63 (high) in the progressive zigzag scan. These are approximate frequency ranges, not a perfect frequency-domain equalizer. -100% removes that band, 0% keeps it, and +100% doubles it. Changes affect P-frame inter residuals, not keyframe intra texture; I-frame refreshes can restore crispness. The Phantom Drift percentage is the approximate proportion of skipped macroblocks to convert, with a bounded motion step that also grows with the control; it is not a pixel speed or exact geometric rotation. Keyframes restore the reference periodically. A completely uniform image remains visually uniform even if its motion vectors change.
 
 ### Common settings
 
@@ -88,6 +88,7 @@ Codec dimensions are internal only; the output still fills the source. At 100% w
 | Layers | Packet editing and Flow Drift on; Frame Peel and Motion Shimmer off |
 | Motion delta X / Y | 160% / 100% |
 | Residual strength / loss | 70% / 10% |
+| Spectral low / mid / high scan | 0% / 0% / 0% (neutral) |
 | Flow exaggeration / persistence | 150% / 40% |
 | Codec height / FPS | 192 px / 18 |
 | Bitrate / keyframe interval | 320 kb/s / 18 frames |
@@ -102,6 +103,9 @@ Choose these under **Instrument → Load starting point**. They are suggestions,
 - **Memory Melt:** Cycle anchor, live predictive packets and packet editing. 288 px / 30 FPS / 650 kb/s. Hold a reference during a movement or hard cut, then try reversing the horizontal motion delta.
 - **Motion Smear:** Live reference and predictive packets, packet editing and Flow Drift. 192 px / 15 FPS / 250 kb/s. Try this on a moving subject, then tune residual strength and flow persistence.
 - **Time Ribbons:** Live reference, Echo and Frame Peel. 144 px / 15 FPS / 180 kb/s. Change band height and history depth for different temporal patterns.
+- **Phantom Drift — animate stills:** Live reference, live predictive packets and Packet editing only. 192 px / 18 FPS / 300 kb/s / GOP 60, with Phantom Drift 45% and otherwise neutral motion/residual controls. Try textured still images or nearly motionless scenes.
+- **Spectral Melt — selective residual loss:** Live reference and predictive packets, Packet editing only. 192 px / 18 FPS / 360 kb/s / GOP 30; low 0%, mid −50%, high −100% with otherwise neutral motion/residual controls. Ideal for smoothing detail as frames predict forward and watching fresh keyframes snap it back.
+- **Spectral Fracture — boosted detail distortion:** Live reference and predictive packets, Packet editing only. 192 px / 18 FPS / 340 kb/s / GOP 42; residual strength 135%, low −45%, mid +120%, high +200%, neutral motion and Phantom Drift 0. It emphasizes unstable texture and ringing rather than smoothing. The one-shot recipe remains editable; it does not add a second codec or affect existing settings until selected.
 - **Randomize (experimental):** Picks one or two compatible operations and bounded values. The generated settings are editable and saved normally. Select it again to roll again. It does not animate settings. See [technical bounds](technical.md#instrument-mode).
 
 The picker returns to Custom after applying any starting point. This is intentional: your current settings are the result, not a continuously enforced preset.

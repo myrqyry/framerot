@@ -47,9 +47,13 @@ Run on a real Linux desktop GPU (not Xvfb) to compare an unfiltered 1920×1080, 
 
 ~~~bash
 build-framerot/test-mosh-performance "$PWD/build-framerot/framerot.so" "$PWD"
+
+# Optional: length of each measurement (2–60 seconds) and codec height
+# (64–576 pixels, multiple of 16). Both intervals use the same settings.
+build-framerot/test-mosh-performance "$PWD/build-framerot/framerot.so" "$PWD" 15 576
 ~~~
 
-Reports OBS frame counts, missed render frames, average render CPU time and filter timing. This is not a streaming/encoder load test or a guarantee for complex scenes.
+Reports OBS frame counts, missed render frames, average render CPU time and filter timing. The synthetic 1080p60 source is measured unfiltered and then with Instrument; the codec still runs at 30 FPS. Example from the local RTX 2070 SUPER on November 22, 2026: at 512×288, 8 seconds per interval, 480/480 baseline and Instrument frames with no lagged frames, and 270/270 codec jobs completed at 1.132ms average. At 1024×576 with 15 seconds per interval, Instrument rendered 900/900 frames without lag and completed 480/480 codec jobs at 5.069ms average / 14.928ms maximum, zero drops/errors. The separate 576px baseline interval did experience 33 lagged frames; these aren't controlled performance comparisons across identical system load. This is not a streaming/encoder load test, GPU stall guarantee, or proof for complex scenes.
 
 ## CI builds
 
@@ -59,7 +63,7 @@ to `main`, and can also be started manually in the Actions tab. It builds
 Ubuntu 24.04 x86_64 runner, then builds `framerot` against that SDK (not against
 the runner's potentially older `libobs-dev` package).
 
-The job runs **all 14 native tests** using FFmpeg and software-rendered OBS/OpenGL
+The job runs **all 18 native and capture tests** using FFmpeg and software-rendered OBS/OpenGL
 under Xvfb, including landscape/portrait effects and the original scene
 geometry regression. Only after those pass does it stage the plugin and upload:
 
@@ -102,16 +106,18 @@ Windows DLL in bin/64bit or a macOS plugin bundle. Native OBS module
 loading, graphics backend testing and packaging are not yet qualified.
 Do not distribute the staged module until these checks pass.
 
-Local Linux qualification: all nine codec tests pass against FFmpeg 6
-and an isolated FFmpeg 8.0 build; all 14 Linux tests pass. This is not
-evidence of native Windows or macOS execution.
+The earlier 0.8.0 codec slice was qualified against both FFmpeg 6
+and an isolated FFmpeg 8.0 build. The current Spectral Melt / Phantom Drift
+features and packet payload rewrite have been verified on FFmpeg 6,
+but not yet rerun against FFmpeg 8 or native Windows/macOS builds.
 
 
 ## Capture real effect previews
 
-On Linux, with the normal build configured and framerot installed, the
-opt-in capture tool uses an isolated libobs context under Xvfb and the
-actual installed module; it does not touch the normal OBS scene collection.
+On Linux, with the normal build configured, the opt-in capture tool uses
+an isolated libobs context under Xvfb. It loads the installed module by
+default, or a staged/build module with `--module`. It does not touch
+the normal OBS scene collection.
 Requires FFmpeg with libwebp animation and drawtext support and Python 3.
 
 ~~~bash
@@ -122,11 +128,50 @@ The input is treated as opaque, resampled to 30 FPS, scaled to at most
 640 pixels on its longest side, and looped twice by default. Each preview
 uses a fresh filter, one second of stationary warmup, then the original
 footage. The default batch writes a clean reference, default Instrument
-and the three editable creative recipes, plus a side-by-side WebP and GIF.
-Use `--all` for all individual modes, `--preset mode-0` (repeatable) for
-specific modes, or `--module /path/to/framerot.so` to test a staged binary.
+and three original creative recipes, plus a side-by-side WebP and GIF.
+The additional codec recipes are selectable explicitly:
+
+~~~bash
+python3 tools/capture-showcase.py input.gif output-new \
+  --module ./build-framerot/framerot.so \
+  --preset clean --preset phantom-drift --preset spectral-melt
+~~~
+
+To compare the opposite frequency treatment, use `--preset clean
+--preset spectral-melt --preset spectral-fracture` with a new output directory.
+Use `--all` for all individual modes and recipes, or
+`--preset mode-0` (repeatable) for specific modes.
 `--loops 1` captures one pass. Output must be a new directory. Raw frames
 are temporary and bounded, and source files are never modified.
+When a capture includes a clean reference and at least one filter, the
+wrapper generates a side-by-side comparison. A clean + Instrument capture
+preserves the original `before-after.webp` and `before-after.gif` outputs.
+Captures with other selections also generate `comparison.webp` and
+`comparison.gif` with up to three panels (clean and the first two effects).
+Panels are scaled without stretching; this is built from the original raw
+30 FPS OBS outputs, rather than comparing encoder-coalesced animation frames.
+Animated WebP may collapse identical consecutive frames. Compare captured
+effects by playback timestamp, not by stored WebP frame index.
 
 The generated logs record module behavior; these are live OBS renders,
 not offline simulations. The preview tool is not a performance benchmark.
+
+## Packet replacement microbenchmark
+
+The opt-in benchmark compares the pre-optimization FFmpeg packet replacement
+sequence against the production `framerot_packet_overwrite` implementation:
+
+~~~bash
+cmake --build build-framerot --target bench-packet-overwrite
+./build-framerot/bench-packet-overwrite
+~~~
+
+It times 512 packet rewrites per sample across 23 alternating-order samples
+(three warmups), reporting median nanoseconds per operation. Payload sizes
+(350, 4,336, 4,638 bytes) are representative of actual MPEG-4 packets from
+the 336×192, 18 FPS, 360 kb/s demo clip. The four scenarios are same-size,
+shrinking, growing, and shared-buffer rewrites. The benchmark verifies bytes,
+timestamps, flags, timebase, side-data counts and preserved shared references.
+It intentionally excludes packet input allocation, codec processing,
+frame rendering, and streaming overhead. Results depend on CPU/cache,
+FFmpeg version, compiler and system load; ratios are not OBS FPS claims.

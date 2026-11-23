@@ -96,9 +96,14 @@ void retro_video_obs_destroy(struct retro_video_obs *state)
             (double)stats.max_codec_ns/1e6, (double)state->map_ns/(double)(state->maps ? state->maps : 1)/1e6,
             (double)state->map_max_ns/1e6);
     if(stats.edited_packets||stats.edit_unsupported)
-        blog(LOG_INFO,"[framerot] compressed packets=%llu motion_deltas=%llu coefficients=%llu erased_blocks=%llu unsupported=%llu",
+        blog(LOG_INFO,"[framerot] compressed packets=%llu motion_deltas=%llu coefficients=%llu erased_blocks=%llu phantom_blocks=%llu spectral_low=%llu spectral_mid=%llu spectral_high=%llu unsupported=%llu",
             (unsigned long long)stats.edited_packets,(unsigned long long)stats.edited_vectors,
-            (unsigned long long)stats.edited_coefficients,(unsigned long long)stats.edited_blocks,(unsigned long long)stats.edit_unsupported);
+            (unsigned long long)stats.edited_coefficients,(unsigned long long)stats.edited_blocks,
+            (unsigned long long)stats.phantom_blocks,
+            (unsigned long long)stats.frequency_coefficients[0],
+            (unsigned long long)stats.frequency_coefficients[1],
+            (unsigned long long)stats.frequency_coefficients[2],
+            (unsigned long long)stats.edit_unsupported);
     codec_worker_destroy(state->worker);
 	obs_enter_graphics();
 	if (state->decoded_texture)

@@ -99,7 +99,9 @@ int main(int argc,char **argv) {
         auto *props=obs_source_properties(filter);
         auto *recipe=obs_properties_get(props,"instrument_recipe");
         if(preset!="instrument"){
-            int r=preset=="memory-melt"?1:preset=="motion-smear"?2:preset=="time-ribbons"?3:0;
+            int r=preset=="memory-melt"?1:preset=="motion-smear"?2:preset=="time-ribbons"?3:
+                  preset=="phantom-drift"?5:preset=="spectral-melt"?6:
+                  preset=="spectral-fracture"?7:0;
             if(r){
                 if(!recipe)return 7;
                 obs_data_set_int(settings,"instrument_recipe",r);

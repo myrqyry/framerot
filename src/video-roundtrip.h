@@ -55,6 +55,8 @@ struct retro_video_options {
     enum retro_predictive mosh_predictive;
     unsigned mosh_layers;
     int mosh_mv_x, mosh_mv_y, mosh_residual, mosh_residual_loss;
+    int mosh_phantom; /* percent of skipped blocks injected with motion, 0 disables */
+    int mosh_frequency[3]; /* inter residual scan bands, -100..200% delta, 0 neutral */
     int mosh_p_interval;       /* mode 1-3: P packet cadence (2..60) */
     int mosh_p_burst;          /* mode 2: packets dropped per cycle (1..interval-1) */
     int mosh_vector_strength;   /* mode 4: 0..500%, vector displacement */
@@ -87,6 +89,8 @@ uint64_t retro_video_compressed_packets(const struct retro_video *);
 uint64_t retro_video_compressed_vectors(const struct retro_video *);
 uint64_t retro_video_compressed_coefficients(const struct retro_video *);
 uint64_t retro_video_compressed_blocks(const struct retro_video *);
+uint64_t retro_video_compressed_phantom_blocks(const struct retro_video *);
+uint64_t retro_video_compressed_frequency_coefficients(const struct retro_video *,int band);
 uint64_t retro_video_compressed_unsupported(const struct retro_video *);
 uint64_t retro_video_encoded_bytes(const struct retro_video *video);
 uint64_t retro_video_encoded_packets(const struct retro_video *video);

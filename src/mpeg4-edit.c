@@ -57,6 +57,9 @@ static void put(struct output *o,unsigned len,unsigned value)
 {
     if(o->failed || len>24 || o->pos+len>o->cap*8){o->failed=true;return;}
     for(unsigned i=len;i>0;i--){
+        /* Zero each output byte on first write, including reused storage.
+         * Avoid clearing the entire worst-case 16 MiB capacity each frame. */
+        if(o->pos%8==0)o->data[o->pos/8]=0;
         if((value>>(i-1))&1u)o->data[o->pos/8]|=(uint8_t)(1u<<(7-o->pos%8));
         o->pos++;
     }
@@ -213,7 +216,28 @@ static bool transcribe_mb(struct bits *b,struct output *o,const struct mpeg4_edi
     size_t start=b->pos;
     int skip=get(b,1),cbpc;
     if(skip<0)return false;
-    if(skip){put(o,1,1);return true;}
+    if(skip){
+        /* A skipped macroblock carries no residuals or explicit motion.
+         * Turn selected ones into Inter/CBP=0 and write bounded *deltas*.
+         * Subsequent MB predictors see this newly coded vector: this is
+         * deliberately codec-native corruption, not absolute vector control. */
+        uint32_t h=hash(0xa513c917u ^ (uint32_t)mb*0x9e3779b9u);
+        if(!opt->phantom_percent || h%100u >= (unsigned)opt->phantom_percent){
+            put(o,1,1);
+            return true;
+        }
+        int step=1+opt->phantom_percent/20; /* 1..6 half-pel units */
+        int dx=(h&0x100u)?step:-step;
+        int dy=(h&0x200u)?step:-step;
+        put(o,1,0); /* no longer skipped */
+        put(o,ff_h263_inter_MCBPC_bits[0],ff_h263_inter_MCBPC_code[0]);
+        put(o,ff_h263_cbpy_tab[15][1],ff_h263_cbpy_tab[15][0]);
+        motion_put(o,fcode,dx);
+        motion_put(o,fcode,dy);
+        stats->phantom_blocks++;
+        stats->vectors+=2;
+        return !o->failed;
+    }
     cbpc=vlc_get(b,mbtab);
     /* Our own encoder doesn't require macroblock stuffing. Fail closed. */
     if(cbpc<0||cbpc==20)return false;
@@ -241,11 +265,21 @@ static bool transcribe_mb(struct bits *b,struct output *o,const struct mpeg4_edi
         bool drop=blk->count&&opt->residual_loss>0&&
             hash(opt->seed^(uint32_t)(mb*6+n))%100u<(unsigned)opt->residual_loss;
         for(int i=0;i<blk->count;i++){
-            int v=blk->c[i].level,scaled=drop?0:v*opt->residual_scale/100;
+            int v=blk->c[i].level, pos=blk->c[i].pos;
+            /* Positions are progressive zigzag scan indices, NOT absolute
+             * spatial frequency or independent horizontal/vertical axes. */
+            int band=pos<10?0:pos<32?1:2;
+            int base=v*opt->residual_scale/100;
+            int scaled=drop?0:opt->frequency[band]==0?base:
+                v*opt->residual_scale*(100+opt->frequency[band])/10000;
             if(scaled>2047)scaled=2047;
             if(scaled< -2047)scaled=-2047;
+            if(base>2047)base=2047;
+            if(base< -2047)base=-2047;
+            if(!drop && opt->frequency[band] && base!=scaled)
+                stats->frequency_coefficients[band]++;
             if(v!=scaled){stats->coefficients++;changed=true;changed_block[n]=true;}
-            if(scaled)blk->c[c++]=(struct coeff){blk->c[i].pos,scaled};
+            if(scaled)blk->c[c++]=(struct coeff){pos,scaled};
         }
         if(blk->count&&!c){new_cbp&=~(32>>n);stats->blocks++;}
         blk->count=c;
@@ -261,8 +295,16 @@ static bool transcribe_mb(struct bits *b,struct output *o,const struct mpeg4_edi
     return !o->failed;
 }
 
-int mpeg4_edit_p_vop(const uint8_t *data,size_t len,const struct mpeg4_edit_options *opt,
-                     uint8_t **out,size_t *out_size,struct mpeg4_edit_stats *stats)
+void mpeg4_edit_buffer_destroy(struct mpeg4_edit_buffer *scratch)
+{
+    if(!scratch)return;
+    free(scratch->data);
+    *scratch=(struct mpeg4_edit_buffer){0};
+}
+
+static int edit_p_vop(const uint8_t *data,size_t len,const struct mpeg4_edit_options *opt,
+                      struct mpeg4_edit_buffer *scratch,
+                      uint8_t **out,size_t *out_size,struct mpeg4_edit_stats *stats)
 {
     if(out)*out=NULL;
     if(out_size)*out_size=0;
@@ -271,18 +313,36 @@ int mpeg4_edit_p_vop(const uint8_t *data,size_t len,const struct mpeg4_edit_opti
        opt->width<16||opt->width>2048||opt->height<16||opt->height>2048||
        opt->width%16||opt->height%16||opt->fps<1||opt->fps>60||
        opt->x_scale< -500||opt->x_scale>500||opt->y_scale< -500||opt->y_scale>500||
-       opt->residual_scale< -200||opt->residual_scale>200||opt->residual_loss<0||opt->residual_loss>100)return -1;
+       opt->residual_scale< -200||opt->residual_scale>200||opt->residual_loss<0||opt->residual_loss>100||
+       opt->phantom_percent<0||opt->phantom_percent>100||
+       opt->frequency[0]< -100||opt->frequency[0]>200||
+       opt->frequency[1]< -100||opt->frequency[1]>200||
+       opt->frequency[2]< -100||opt->frequency[2]>200)return -1;
     struct bits b={data,len,0};int fcode;
     if(!read_header(&b,opt,&fcode))return -1;
-    if(opt->x_scale==100&&opt->y_scale==100&&opt->residual_scale==100&&!opt->residual_loss)return 0;
+    if(opt->x_scale==100&&opt->y_scale==100&&opt->residual_scale==100&&
+       !opt->residual_loss&&!opt->phantom_percent&&
+       !opt->frequency[0]&&!opt->frequency[1]&&!opt->frequency[2])return 0;
     framerot_init_vlc_once(init_tables);
     size_t mb_count=(size_t)(opt->width/16)*(size_t)(opt->height/16);
     /* Bound by max 6x64 coefficients, each escape <=30 bits, per MB.
      * Allocate only as much as could be needed, plus the small header. */
     size_t cap=len+mb_count*1500+64;
     if(cap>16u*1024u*1024u)cap=16u*1024u*1024u;
-    struct output o={calloc(cap,1),cap,0,false};
-    if(!o.data)return -1;
+    uint8_t *bytes=NULL;
+    if(scratch){
+        if(scratch->capacity<cap){
+            uint8_t *grown=realloc(scratch->data,cap);
+            if(!grown)return -1;
+            scratch->data=grown;
+            scratch->capacity=cap;
+        }
+        bytes=scratch->data;
+    }else{
+        bytes=malloc(cap);
+        if(!bytes)return -1;
+    }
+    struct output o={bytes,cap,0,false};
     struct mpeg4_edit_stats local={0};
     copy(&o,&b,0,b.pos);
     for(size_t mb=0;mb<mb_count;mb++)
@@ -292,10 +352,33 @@ int mpeg4_edit_p_vop(const uint8_t *data,size_t len,const struct mpeg4_edit_opti
     size_t remaining=b.size*8-b.pos;
     if(remaining==0 || remaining>8 || get(&b,1)!=0)goto unsupported;
     while(b.pos<b.size*8)if(get(&b,1)!=1)goto unsupported;
-    if(!local.vectors&&!local.coefficients&&!local.blocks){free(o.data);return 0;}
+    if(!local.vectors&&!local.coefficients&&!local.blocks&&!local.phantom_blocks){
+        if(!scratch)free(o.data);
+        return 0;
+    }
     put(&o,1,0);while(!o.failed&&o.pos%8)put(&o,1,1);
     if(o.failed)goto unsupported;
     *out=o.data;*out_size=o.pos/8;*stats=local;return 1;
 unsupported:
-    free(o.data);return -1;
+    if(!scratch)free(o.data);
+    return -1;
+}
+
+int mpeg4_edit_p_vop(const uint8_t *data,size_t len,const struct mpeg4_edit_options *opt,
+                     uint8_t **out,size_t *out_size,struct mpeg4_edit_stats *stats)
+{
+    return edit_p_vop(data,len,opt,NULL,out,out_size,stats);
+}
+
+int mpeg4_edit_p_vop_reuse(const uint8_t *data,size_t len,const struct mpeg4_edit_options *opt,
+                           struct mpeg4_edit_buffer *scratch,
+                           uint8_t **out,size_t *out_size,struct mpeg4_edit_stats *stats)
+{
+    if(!scratch){
+        if(out)*out=NULL;
+        if(out_size)*out_size=0;
+        if(stats)*stats=(struct mpeg4_edit_stats){0};
+        return -1;
+    }
+    return edit_p_vop(data,len,opt,scratch,out,out_size,stats);
 }

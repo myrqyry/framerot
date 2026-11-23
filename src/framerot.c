@@ -96,6 +96,10 @@ static void mosh_showcase_defaults(obs_data_t *settings, int mode)
     obs_data_set_default_int(settings,"mv_y",100);
     obs_data_set_default_int(settings,"residual_scale",instrument?70:65);
     obs_data_set_default_int(settings,"residual_loss",instrument?10:0);
+    obs_data_set_default_int(settings,"phantom_drift",0);
+    obs_data_set_default_int(settings,"frequency_low",0);
+    obs_data_set_default_int(settings,"frequency_mid",0);
+    obs_data_set_default_int(settings,"frequency_high",0);
 
 }
 
@@ -139,6 +143,12 @@ static void mosh_update(void *data, obs_data_t *settings)
     next.mosh_mv_y=(int)obs_data_get_int(settings,"mv_y");
     next.mosh_residual=(int)obs_data_get_int(settings,"residual_scale");
     next.mosh_residual_loss=(int)obs_data_get_int(settings,"residual_loss");
+    next.mosh_phantom=(int)obs_data_get_int(settings,"phantom_drift");
+    const char *freq_keys[]={"frequency_low","frequency_mid","frequency_high"};
+    for(int band=0;band<3;band++){
+        int v=(int)obs_data_get_int(settings,freq_keys[band]);
+        next.mosh_frequency[band]=v< -100?-100:v>200?200:v;
+    }
     if(next.mosh_mv_x< -500)next.mosh_mv_x=-500;
     if(next.mosh_mv_x>500)next.mosh_mv_x=500;
     if(next.mosh_mv_y< -500)next.mosh_mv_y=-500;
@@ -147,6 +157,8 @@ static void mosh_update(void *data, obs_data_t *settings)
     if(next.mosh_residual>200)next.mosh_residual=200;
     if(next.mosh_residual_loss<0)next.mosh_residual_loss=0;
     if(next.mosh_residual_loss>100)next.mosh_residual_loss=100;
+    if(next.mosh_phantom<0)next.mosh_phantom=0;
+    if(next.mosh_phantom>100)next.mosh_phantom=100;
     next.fps = (int)obs_data_get_int(settings, "fps");
     next.bitrate = (int)obs_data_get_int(settings, "kbps") * 1000;
     next.gop_size = (int)obs_data_get_int(settings, "gop");
@@ -210,7 +222,8 @@ static void mosh_property_visibility(obs_properties_t *props, obs_data_t *settin
     const bool shimmer=mode==RETRO_MOSH_MOTION_SHIMMER || (instrument && obs_data_get_bool(settings,"layer_shimmer"));
     const char *keys[]={"instrument_recipe","reference","predictive","layer_flow","layer_peel","layer_shimmer","layer_compressed"};
     for(size_t i=0;i<sizeof keys/sizeof *keys;i++) obs_property_set_visible(obs_properties_get(props,keys[i]),instrument);
-    const char *compressed_keys[]={"mv_x","mv_y","residual_scale","residual_loss"};
+    const char *compressed_keys[]={"mv_x","mv_y","residual_scale","residual_loss","phantom_drift",
+                                   "frequency_low","frequency_mid","frequency_high"};
     for(size_t i=0;i<sizeof compressed_keys/sizeof *compressed_keys;i++) obs_property_set_visible(obs_properties_get(props,compressed_keys[i]),compressed);
     obs_property_set_visible(obs_properties_get(props,"skip_keyframes"),mode==RETRO_MOSH_KEYFRAME_SKIP || (instrument && reference==RETRO_REFERENCE_SKIP));
     obs_property_set_visible(obs_properties_get(props,"p_interval"),(mode>=RETRO_MOSH_PFRAME_DROP && mode<=RETRO_MOSH_PFRAME_ECHO) ||
@@ -245,7 +258,76 @@ static bool mosh_recipe_changed(obs_properties_t *props,obs_property_t *property
     const int recipe=(int)obs_data_get_int(settings,"instrument_recipe");
     if(recipe==0) return false;
     obs_data_set_int(settings,"instrument_recipe",0);
-    if(obs_data_get_int(settings,"mode")!=RETRO_MOSH_INSTRUMENT || recipe<1 || recipe>4) return true;
+    if(obs_data_get_int(settings,"mode")!=RETRO_MOSH_INSTRUMENT || recipe<1 || recipe>7) return true;
+    if(recipe==7) {
+        /* Counterpoint to Spectral Melt: intentionally exaggerated inter
+         * residuals create sharp, unstable ringing as reference frames age.
+         * This is a recipe of existing codec controls, not a new decoder. */
+        obs_data_set_int(settings,"reference",RETRO_REFERENCE_LIVE);
+        obs_data_set_int(settings,"predictive",RETRO_PREDICTIVE_LIVE);
+        obs_data_set_bool(settings,"layer_compressed",true);
+        obs_data_set_bool(settings,"layer_flow",false);
+        obs_data_set_bool(settings,"layer_shimmer",false);
+        obs_data_set_bool(settings,"layer_peel",false);
+        obs_data_set_int(settings,"codec_height",192);
+        obs_data_set_int(settings,"fps",18);
+        obs_data_set_int(settings,"kbps",340);
+        obs_data_set_int(settings,"gop",42);
+        obs_data_set_int(settings,"mv_x",100);
+        obs_data_set_int(settings,"mv_y",100);
+        obs_data_set_int(settings,"residual_scale",135);
+        obs_data_set_int(settings,"residual_loss",0);
+        obs_data_set_int(settings,"phantom_drift",0);
+        obs_data_set_int(settings,"frequency_low",-45);
+        obs_data_set_int(settings,"frequency_mid",120);
+        obs_data_set_int(settings,"frequency_high",200);
+        return mosh_controls_changed(props,property,settings);
+    }
+    if(recipe==6) {
+        /* Remove temporal detail selectively, leaving low scan positions
+         * untouched; user can raise bands again in Packet editing. */
+        obs_data_set_int(settings,"reference",RETRO_REFERENCE_LIVE);
+        obs_data_set_int(settings,"predictive",RETRO_PREDICTIVE_LIVE);
+        obs_data_set_bool(settings,"layer_compressed",true);
+        obs_data_set_bool(settings,"layer_flow",false);
+        obs_data_set_bool(settings,"layer_shimmer",false);
+        obs_data_set_bool(settings,"layer_peel",false);
+        obs_data_set_int(settings,"codec_height",192);
+        obs_data_set_int(settings,"fps",18);
+        obs_data_set_int(settings,"kbps",360);
+        obs_data_set_int(settings,"gop",30);
+        obs_data_set_int(settings,"mv_x",100);
+        obs_data_set_int(settings,"mv_y",100);
+        obs_data_set_int(settings,"residual_scale",100);
+        obs_data_set_int(settings,"residual_loss",0);
+        obs_data_set_int(settings,"phantom_drift",0);
+        obs_data_set_int(settings,"frequency_low",0);
+        obs_data_set_int(settings,"frequency_mid",-50);
+        obs_data_set_int(settings,"frequency_high",-100);
+        return mosh_controls_changed(props,property,settings);
+    }
+    if(recipe==5) {
+        /* A real codec effect for stills and nearly static video. */
+        obs_data_set_int(settings,"reference",RETRO_REFERENCE_LIVE);
+        obs_data_set_int(settings,"predictive",RETRO_PREDICTIVE_LIVE);
+        obs_data_set_bool(settings,"layer_compressed",true);
+        obs_data_set_bool(settings,"layer_flow",false);
+        obs_data_set_bool(settings,"layer_shimmer",false);
+        obs_data_set_bool(settings,"layer_peel",false);
+        obs_data_set_int(settings,"codec_height",192);
+        obs_data_set_int(settings,"fps",18);
+        obs_data_set_int(settings,"kbps",300);
+        obs_data_set_int(settings,"gop",60);
+        obs_data_set_int(settings,"mv_x",100);
+        obs_data_set_int(settings,"mv_y",100);
+        obs_data_set_int(settings,"residual_scale",100);
+        obs_data_set_int(settings,"residual_loss",0);
+        obs_data_set_int(settings,"phantom_drift",45);
+        obs_data_set_int(settings,"frequency_low",0);
+        obs_data_set_int(settings,"frequency_mid",0);
+        obs_data_set_int(settings,"frequency_high",0);
+        return mosh_controls_changed(props,property,settings);
+    }
     if(recipe==4) {
         /* Monotonic time seeds a fresh editable roll only on explicit choice. */
         struct retro_video_options o=retro_video_random_instrument(os_gettime_ns());
@@ -269,6 +351,10 @@ static bool mosh_recipe_changed(obs_properties_t *props,obs_property_t *property
         obs_data_set_int(settings,"mv_y",o.mosh_mv_y);
         obs_data_set_int(settings,"residual_scale",o.mosh_residual);
         obs_data_set_int(settings,"residual_loss",o.mosh_residual_loss);
+        obs_data_set_int(settings,"phantom_drift",o.mosh_phantom);
+        obs_data_set_int(settings,"frequency_low",o.mosh_frequency[0]);
+        obs_data_set_int(settings,"frequency_mid",o.mosh_frequency[1]);
+        obs_data_set_int(settings,"frequency_high",o.mosh_frequency[2]);
         obs_data_set_int(settings,"vector_strength",o.mosh_vector_strength);
         obs_data_set_int(settings,"vector_persistence",o.mosh_vector_persistence);
         obs_data_set_int(settings,"slice_history",o.mosh_slice_history);
@@ -296,6 +382,10 @@ static bool mosh_recipe_changed(obs_properties_t *props,obs_property_t *property
     obs_data_set_int(settings,"mv_y",100);
     obs_data_set_int(settings,"residual_scale",melt?65:smear?40:100);
     obs_data_set_int(settings,"residual_loss",melt?15:smear?25:0);
+    obs_data_set_int(settings,"phantom_drift",0);
+    obs_data_set_int(settings,"frequency_low",0);
+    obs_data_set_int(settings,"frequency_mid",0);
+    obs_data_set_int(settings,"frequency_high",0);
     obs_data_set_int(settings,"vector_strength",250);
     obs_data_set_int(settings,"vector_persistence",65);
     obs_data_set_int(settings,"slice_history",6);
@@ -358,6 +448,9 @@ static obs_properties_t *mosh_properties(void *data)
     obs_property_list_add_int(recipe,"Memory Melt — lingering reference",1);
     obs_property_list_add_int(recipe,"Motion Smear — exaggerated movement",2);
     obs_property_list_add_int(recipe,"Time Ribbons — temporal strips",3);
+    obs_property_list_add_int(recipe,"Phantom Drift — animate stills",5);
+    obs_property_list_add_int(recipe,"Spectral Melt — selective residual loss",6);
+    obs_property_list_add_int(recipe,"Spectral Fracture — boosted detail distortion",7);
     obs_property_list_add_int(recipe,"Randomize (experimental)",4);
     obs_property_set_long_description(recipe,"Selecting a starting point replaces effect and codec settings, but preserves wet mix and live alpha. Edit any setting afterward.");
     obs_property_set_modified_callback(recipe,mosh_recipe_changed);
@@ -381,6 +474,25 @@ static obs_properties_t *mosh_properties(void *data)
     obs_properties_add_int_slider(props,"mv_y","Motion delta Y (%)",-500,500,5);
     obs_properties_add_int_slider(props,"residual_scale","Residual strength (%)",-200,200,5);
     obs_properties_add_int_slider(props,"residual_loss","Residual block loss (%)",0,100,1);
+    const char *frequency_keys[]={"frequency_low","frequency_mid","frequency_high"};
+    const char *frequency_labels[]={"Spectral low scan change (%)",
+                                   "Spectral mid scan change (%)",
+                                   "Spectral high scan change (%)"};
+    for(int band=0;band<3;band++){
+        obs_property_t *p=obs_properties_add_int_slider(props,frequency_keys[band],
+            frequency_labels[band],-100,200,5);
+        obs_property_set_long_description(p,
+            "Reweight quantized MPEG-4 predictive-frame residual coefficients by zigzag scan position. "
+            "Low: 0–9, mid: 10–31, high: 32–63. 0 leaves unchanged, -100 removes, "
+            "+100 doubles. This is an approximate frequency order, not true spectral filtering; "
+            "I-frames are not edited.");
+    }
+    obs_property_t *phantom=obs_properties_add_int_slider(props,"phantom_drift",
+        "Phantom Drift (skipped blocks %)",0,100,1);
+    obs_property_set_long_description(phantom,
+        "Turns a proportion of skipped MPEG-4 macroblocks into residual-free moving blocks. "
+        "Works on textured stills and static footage; 0 disables the effect. "
+        "Motion deltas influence predictive neighbors, so output is intentionally unstable.");
     obs_properties_add_int_slider(props, "skip_keyframes", "Classic: skipped keyframes", 0, 8, 1);
     obs_properties_add_int_slider(props, "p_interval", "P-frame interval (Tear/Burst/Echo)", 2, 60, 1);
     obs_properties_add_int_slider(props, "p_burst", "Burst: frames lost per interval", 1, 30, 1);

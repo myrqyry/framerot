@@ -28,7 +28,19 @@ Instrument is the default: combine effects, play with their controls, or discove
     <td align="center"><img src="assets/showcase/motion-smear.webp" alt="Motion Smear" width="300"></td>
     <td align="center"><img src="assets/showcase/time-ribbons.webp" alt="Time Ribbons" width="300"></td>
   </tr>
+  <tr>
+    <th>Phantom Drift</th>
+    <th>Spectral Melt</th>
+    <th>Spectral Fracture</th>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/showcase/phantom-drift.webp" alt="Phantom Drift turning skipped MPEG-4 blocks into visible motion" width="300"></td>
+    <td align="center"><img src="assets/showcase/spectral-melt.webp" alt="Spectral Melt softening compressed predictive-frame detail" width="300"></td>
+    <td align="center"><img src="assets/showcase/spectral-fracture.webp" alt="Spectral Fracture creating sharp ringing and texture breakup" width="300"></td>
+  </tr>
 </table>
+
+*These are actual output captures from the native OBS filter, not simulated shader previews. How much an effect changes the image depends on motion, texture, and keyframe timing.*
 
 ## Get started
 
@@ -48,7 +60,7 @@ Instrument puts the controls for your active operations within reach. Turn a lay
 | --- | --- |
 | Reference frames | Keep live images, skip keyframes, or cycle a held reference. |
 | Predictive frames | Drop, burst, echo or rewind compressed motion. |
-| Packet editing | Stretch or reverse encoded motion; reduce or remove detail. |
+| Packet editing | Stretch or reverse actual MPEG-4 motion deltas, sculpt low/mid/high predictive residuals, or add Phantom Drift to skipped blocks. |
 | Flow Drift | Drag earlier imagery along the codec's motion vectors. |
 | Frame Peel | Pull horizontal strips from different moments in time. |
 | Motion Shimmer | Alter the codec's motion interpolation for subtler crawling artifacts. |
@@ -62,9 +74,14 @@ Use **Load starting point** to load an editable combination:
 | Memory Melt | A lingering reference with distorted motion and lost detail. |
 | Motion Smear | Distorted motion layered with persistent decoded-frame feedback. |
 | Time Ribbons | Echoed motion broken into temporal bands. |
+| Phantom Drift | Animate textured stills by turning skipped MPEG-4 blocks into moving blocks. |
+| Spectral Melt | Remove high-frequency predictive detail while keeping low-frequency structure. |
+| Spectral Fracture | Amplify mid/high predictive detail and suppress low-band coefficients for hard, unstable edges. |
 | Randomize (experimental) | A fresh combination of one or two compatible operations within conservative bounds. |
 
-Choose Randomize again whenever you want a new roll. Your result stays editable and does not shuffle itself while rendering. Starting points replace effect and codec settings, but preserve wet mix and alpha.
+**Phantom Drift** works best on textured stills or almost-static video; perfectly uniform areas remain uniform. **Spectral Melt** attenuates middle/high-frequency predictive detail, while **Spectral Fracture** boosts mid/high detail for harsher ringing and block texture. Their three frequency controls range from **−100%** (remove that scan band), through **0%** (leave it unchanged), to **+200%** (triple it). They affect MPEG-4 inter-frame residuals, not I-frame image detail, so keyframes can refresh the look.
+
+Choose Randomize again whenever you want a new roll. Every starting point is a one-shot, editable combination, not a separate plugin or continuously changing preset. Starting points replace effect and codec settings, but preserve wet mix and live alpha.
 
 ### Perform live
 
@@ -85,7 +102,9 @@ Looking for vintage compression without datamoshing? Try the companion [Retro Ef
 
 The filter keeps your source's dimensions and optionally preserves its live transparency. Lower codec height, bitrate and frame rate change the look — they are not output canvas settings. Hard cuts, camera movement and moving subjects reveal the effects best.
 
-The codec worker is bounded, but GPU driver stalls and codec reconfiguration delays are still possible. Test your own scenes before relying on the filter during a broadcast. HDR rendering bypasses the SDR effect. The randomizer limits parameter ranges, not every possible failure or visual outcome.
+The codec worker keeps at most one pending input and one in-flight frame; it favors the latest image rather than blocking the render thread when falling behind. Changes to live scalar controls are retained for the worker's next processing call, although an already-processing frame may still use the previous values.
+
+GPU driver stalls and codec reconfiguration delays are still possible. Test your own scenes before relying on the filter during a broadcast. HDR rendering bypasses the SDR effect. The randomizer limits parameter ranges, not every possible failure or visual outcome. [Native testing and optional GPU diagnostics](docs/development.md) exercise real rendering, but do not substitute for a sustained broadcast test.
 
 ## Documentation
 

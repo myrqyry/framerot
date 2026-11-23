@@ -11,11 +11,26 @@ ROOT = Path(__file__).resolve().parents[1]
 FPS = 30
 DEFAULTS = ("clean", "instrument", "memory-melt", "motion-smear", "time-ribbons")
 MODES = tuple(f"mode-{n}" for n in range(9))
-PRESETS = DEFAULTS + MODES
+PRESETS = DEFAULTS + ("phantom-drift", "spectral-melt", "spectral-fracture") + MODES
 
 
 def run(*args, **kwargs):
     return subprocess.run([str(a) for a in args], check=True, **kwargs)
+
+
+def comparison_presets(selected):
+    """Choose at most two effects beside a clean reference, in capture order."""
+    if "clean" not in selected:
+        return ()
+    effects = tuple(name for name in selected if name != "clean")
+    return ("clean", *effects[:2]) if effects else ()
+
+
+def comparison_panel_size(width, height, count):
+    """Keep a three-panel comparison within 1260px, without stretching."""
+    panel_width = min(420 if count >= 3 else 480, width)
+    panel_height = max(2, int(height * panel_width / width) // 2 * 2)
+    return panel_width, panel_height
 
 
 def main():
@@ -75,7 +90,7 @@ def main():
                 "-vf", "fps=15", "-c:v", "libwebp_anim", "-quality", 80,
                 "-compression_level", 5, "-loop", 0, "-an", output / (preset + ".webp"))
             # Keep raw sources for the comparison only; other intermediates are disposable.
-            if preset not in ("clean", "instrument"):
+            if preset not in set(comparison_presets(selected)) | {"clean", "instrument"}:
                 rendered.unlink()
             print(f"Captured {preset}: {output / (preset + '.webp')}", flush=True)
         if all(s in selected for s in ("clean", "instrument")):
@@ -94,6 +109,32 @@ def main():
             run("ffmpeg", "-nostdin", "-v", "error", *inputs, "-filter_complex",
                 graph + ",fps=12,split[x][y];[x]palettegen=max_colors=192[p];[y][p]paletteuse=dither=bayer",
                 "-loop", 0, output / "before-after.gif")
+        compare = comparison_presets(selected)
+        if compare and compare != ("clean", "instrument"):
+            panel_w, panel_h = comparison_panel_size(w, h, len(compare))
+            labels = "abc"
+            graph = ";".join(
+                f"[{i}:v]fps=15,scale={panel_w}:{panel_h},"
+                f"pad={panel_w}:{panel_h+26}:0:26:color=0x131313,"
+                f"drawtext=text='{('Original footage' if preset == 'clean' else 'framerot - ' + preset.replace('-', ' '))}':"
+                f"fontcolor=white:fontsize=14:x=8:y=5[{labels[i]}]"
+                for i, preset in enumerate(compare)
+            ) + ";" + "".join(f"[{labels[i]}]" for i in range(len(compare))) + (
+                f"hstack=inputs={len(compare)}"
+            )
+            inputs = [
+                argument
+                for preset in compare
+                for argument in (*raw_args, "-i", work / (preset + ".bgra"))
+            ]
+            run("ffmpeg", "-nostdin", "-v", "error", *inputs, "-filter_complex", graph,
+                "-c:v", "libwebp_anim", "-quality", 78, "-compression_level", 5,
+                "-loop", 0, "-an", output / "comparison.webp")
+            run("ffmpeg", "-nostdin", "-v", "error", *inputs, "-filter_complex",
+                graph + ",fps=12,split[x][y];[x]palettegen=max_colors=192[p];"
+                "[y][p]paletteuse=dither=bayer",
+                "-loop", 0, output / "comparison.gif")
+            print("Compared:", ", ".join(compare), flush=True)
         print("Complete:", output)
 
 

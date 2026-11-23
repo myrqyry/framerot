@@ -12,6 +12,7 @@
 struct codec_worker {
     std::thread thread;
     std::mutex lock;
+    std::mutex controls_lock; /* independent of frame queue/result ownership */
     std::condition_variable wake;
     retro_video_options options,controls;
     std::vector<uint8_t> pending,active,result,scratch;
@@ -43,12 +44,16 @@ static void worker_main(codec_worker *w)
         if (w->stop) break;
         w->active.swap(w->pending);
         w->queued=false;
-        struct retro_video_options controls=w->controls;
         guard.unlock();
+        struct retro_video_options controls;
+        {
+            std::lock_guard<std::mutex> controls_guard(w->controls_lock);
+            controls=w->controls;
+        }
         uint64_t start=now_ns();
         int rc=0;
         bool attempted=false, restarted=false;
-        uint64_t ep=0,ev=0,ec=0,eb=0,eu=0;
+        uint64_t ep=0,ev=0,ec=0,eb=0,eph=0,eu=0,frequency[3]={0};
         if (codec || start >= retry_after) {
             attempted=true;
             if (!codec) {
@@ -60,12 +65,18 @@ static void worker_main(codec_worker *w)
                 retro_video_set_live_options(codec,&controls);
                 ep=retro_video_compressed_packets(codec);ev=retro_video_compressed_vectors(codec);
                 ec=retro_video_compressed_coefficients(codec);eb=retro_video_compressed_blocks(codec);
+                eph=retro_video_compressed_phantom_blocks(codec);
+                for(int band=0;band<3;band++)
+                    frequency[band]=retro_video_compressed_frequency_coefficients(codec,band);
                 eu=retro_video_compressed_unsupported(codec);
             }
             rc=codec ? retro_video_process(codec,w->active.data(),(int)w->row,w->scratch.data(),(int)w->row) : -1;
             if(codec) {
                 ep=retro_video_compressed_packets(codec)-ep;ev=retro_video_compressed_vectors(codec)-ev;
                 ec=retro_video_compressed_coefficients(codec)-ec;eb=retro_video_compressed_blocks(codec)-eb;
+                eph=retro_video_compressed_phantom_blocks(codec)-eph;
+                for(int band=0;band<3;band++)
+                    frequency[band]=retro_video_compressed_frequency_coefficients(codec,band)-frequency[band];
                 eu=retro_video_compressed_unsupported(codec)-eu;
             }
             if (rc<0) {
@@ -81,7 +92,10 @@ static void worker_main(codec_worker *w)
             continue;
         }
         w->stats.edited_packets+=ep;w->stats.edited_vectors+=ev;
-        w->stats.edited_coefficients+=ec;w->stats.edited_blocks+=eb;w->stats.edit_unsupported+=eu;
+        w->stats.edited_coefficients+=ec;w->stats.edited_blocks+=eb;
+        w->stats.phantom_blocks+=eph;w->stats.edit_unsupported+=eu;
+        for(int band=0;band<3;band++)
+            w->stats.frequency_coefficients[band]+=frequency[band];
         w->stats.total_codec_ns+=duration;
         if (duration>w->stats.max_codec_ns) w->stats.max_codec_ns=duration;
         if (restarted && rc>=0) {w->stats.recovered++; recovering=false;}
@@ -125,11 +139,12 @@ bool codec_worker_submit(codec_worker *w,const uint8_t *pixels,int stride)
     w->queued=true;++w->stats.submitted;w->stats.max_pending=1;
     guard.unlock();w->wake.notify_one();return true;
 }
-void codec_worker_set_controls(codec_worker *w,const retro_video_options *o)
+bool codec_worker_set_controls(codec_worker *w,const retro_video_options *o)
 {
-    if(!w||!o)return;
-    std::unique_lock<std::mutex> guard(w->lock,std::try_to_lock);
-    if(guard.owns_lock())w->controls=*o;
+    if(!w||!o)return false;
+    std::lock_guard<std::mutex> guard(w->controls_lock);
+    w->controls=*o;
+    return true;
 }
 void codec_worker_set_anchor_hold(codec_worker *w,bool hold){if(w)w->hold.store(hold);}
 bool codec_worker_faulted(codec_worker *w){return !w||w->fault.load();}

@@ -113,7 +113,7 @@ int main(int argc, char **argv)
     obs_properties_t *preset_props = obs_source_properties(preset_source);
     obs_property_t *preset_mode = obs_properties_get(preset_props, "mode");
     if (!preset_settings || !preset_props || !preset_mode) return 16;
-    for (const char *key : {"codec_height","wet_mix","preserve_alpha","reference","predictive","layer_flow","layer_peel","layer_shimmer","layer_compressed","mv_x","mv_y","residual_scale","residual_loss","hold_anchor","release_anchor","reset_codec"}) {
+    for (const char *key : {"codec_height","wet_mix","preserve_alpha","reference","predictive","layer_flow","layer_peel","layer_shimmer","layer_compressed","mv_x","mv_y","residual_scale","residual_loss","phantom_drift","frequency_low","frequency_mid","frequency_high","hold_anchor","release_anchor","reset_codec"}) {
         if (!obs_properties_get(preset_props,key)) {
             std::fprintf(stderr,"MISSING_INSTRUMENT_CONTROL %s\n",key);return 31;
         }
@@ -129,6 +129,10 @@ int main(int argc, char **argv)
         !obs_data_get_bool(preset_settings,"layer_flow") ||
         obs_data_get_bool(preset_settings,"layer_peel") ||
         obs_data_get_bool(preset_settings,"layer_shimmer") ||
+        obs_data_get_int(preset_settings,"phantom_drift")!=0 ||
+        obs_data_get_int(preset_settings,"frequency_low")!=0 ||
+        obs_data_get_int(preset_settings,"frequency_mid")!=0 ||
+        obs_data_get_int(preset_settings,"frequency_high")!=0 ||
         obs_data_get_int(preset_settings,"wet_mix")!=100 ||
         !obs_data_get_bool(preset_settings,"preserve_alpha") ||
         !obs_property_visible(obs_properties_get(preset_props,"mv_x")) ||
@@ -205,7 +209,7 @@ int main(int argc, char **argv)
         auto *p = obs_properties_get(preset_props, key);
         return p && obs_property_visible(p);
     };
-    for (const char *key : {"mv_x","residual_loss","vector_strength","slice_history",
+    for (const char *key : {"mv_x","residual_loss","phantom_drift","frequency_low","frequency_mid","frequency_high","vector_strength","slice_history",
                             "rounding_interval","skip_keyframes","anchor_span","p_interval","p_burst","rewind_depth"}) {
         if (visible(key)) {
             std::fprintf(stderr,"INSTRUMENT_INACTIVE_CONTROL_VISIBLE %s\n",key);
@@ -214,7 +218,9 @@ int main(int argc, char **argv)
     }
     obs_data_set_bool(preset_settings,"layer_compressed",true);
     obs_property_modified(obs_properties_get(preset_props,"layer_compressed"),preset_settings);
-    if (!visible("mv_x") || !visible("residual_loss") || visible("vector_strength")) return 41;
+    if (!visible("mv_x") || !visible("residual_loss") || !visible("phantom_drift") ||
+        !visible("frequency_low") || !visible("frequency_mid") || !visible("frequency_high") ||
+        visible("vector_strength")) return 41;
     obs_data_set_int(preset_settings,"reference",2);
     obs_property_modified(obs_properties_get(preset_props,"reference"),preset_settings);
     if (!visible("anchor_span") || visible("skip_keyframes")) return 42;
@@ -237,6 +243,59 @@ int main(int argc, char **argv)
         !obs_data_get_bool(preset_settings,"layer_compressed") ||
         obs_data_get_int(preset_settings,"wet_mix") != 37 ||
         obs_data_get_bool(preset_settings,"preserve_alpha")) return 45;
+    obs_data_set_int(preset_settings,"instrument_recipe",5);
+    obs_property_modified(recipe,preset_settings);
+    if(obs_data_get_int(preset_settings,"instrument_recipe")!=0 ||
+       obs_data_get_int(preset_settings,"phantom_drift")!=45 ||
+       obs_data_get_int(preset_settings,"reference")!=0 ||
+       obs_data_get_int(preset_settings,"gop")!=60 ||
+       !obs_data_get_bool(preset_settings,"layer_compressed") ||
+       obs_data_get_bool(preset_settings,"layer_flow") ||
+       !visible("phantom_drift") ||
+       obs_data_get_int(preset_settings,"wet_mix")!=37) return 59;
+    /* Spectral Melt explicitly changes frequency scan bands, not motion. */
+    obs_data_set_int(preset_settings,"instrument_recipe",6);
+    obs_property_modified(recipe,preset_settings);
+    if(obs_data_get_int(preset_settings,"instrument_recipe")!=0 ||
+       obs_data_get_int(preset_settings,"frequency_low")!=0 ||
+       obs_data_get_int(preset_settings,"frequency_mid")!=-50 ||
+       obs_data_get_int(preset_settings,"frequency_high")!=-100 ||
+       obs_data_get_int(preset_settings,"phantom_drift")!=0 ||
+       obs_data_get_int(preset_settings,"mv_x")!=100 ||
+       obs_data_get_int(preset_settings,"residual_scale")!=100 ||
+       obs_data_get_int(preset_settings,"reference")!=0 ||
+       obs_data_get_int(preset_settings,"gop")!=30 ||
+       !obs_data_get_bool(preset_settings,"layer_compressed") ||
+       obs_data_get_bool(preset_settings,"layer_flow") ||
+       !visible("frequency_high") ||
+       obs_data_get_int(preset_settings,"wet_mix")!=37 ||
+       obs_data_get_bool(preset_settings,"preserve_alpha")) return 60;
+    /* Spectral Fracture is a distinct high-band amplification recipe;
+     * it is one-shot, preserving wet mix/alpha and not leaking into Melt. */
+    obs_data_set_int(preset_settings,"instrument_recipe",7);
+    obs_property_modified(recipe,preset_settings);
+    if(obs_data_get_int(preset_settings,"instrument_recipe")!=0 ||
+       obs_data_get_int(preset_settings,"frequency_low")!=-45 ||
+       obs_data_get_int(preset_settings,"frequency_mid")!=120 ||
+       obs_data_get_int(preset_settings,"frequency_high")!=200 ||
+       obs_data_get_int(preset_settings,"residual_scale")!=135 ||
+       obs_data_get_int(preset_settings,"phantom_drift")!=0 ||
+       obs_data_get_int(preset_settings,"mv_x")!=100 ||
+       obs_data_get_int(preset_settings,"mv_y")!=100 ||
+       obs_data_get_int(preset_settings,"reference")!=0 ||
+       obs_data_get_int(preset_settings,"predictive")!=0 ||
+       obs_data_get_int(preset_settings,"fps")!=18 ||
+       obs_data_get_int(preset_settings,"kbps")!=340 ||
+       obs_data_get_int(preset_settings,"gop")!=42 ||
+       obs_data_get_int(preset_settings,"codec_height")!=192 ||
+       !obs_data_get_bool(preset_settings,"layer_compressed") ||
+       obs_data_get_bool(preset_settings,"layer_flow") ||
+       obs_data_get_bool(preset_settings,"layer_shimmer") ||
+       obs_data_get_bool(preset_settings,"layer_peel") ||
+       !visible("frequency_high") ||
+       obs_data_get_int(preset_settings,"wet_mix")!=37 ||
+       obs_data_get_bool(preset_settings,"preserve_alpha")) return 61;
+    /* Existing recipes must clear earlier spectral and phantom edits. */
     obs_data_set_int(preset_settings,"mv_x",95);
     obs_properties_apply_settings(preset_props,preset_settings);
     if (obs_data_get_int(preset_settings,"mv_x") != 95) return 46;
@@ -244,7 +303,10 @@ int main(int argc, char **argv)
     obs_property_modified(recipe,preset_settings);
     if (!visible("vector_strength") || !visible("mv_x") || visible("anchor_span") ||
         obs_data_get_int(preset_settings,"mv_x")!=250 ||
-        obs_data_get_int(preset_settings,"codec_height")!=192) return 48;
+        obs_data_get_int(preset_settings,"codec_height")!=192 ||
+        obs_data_get_int(preset_settings,"phantom_drift")!=0 ||
+        obs_data_get_int(preset_settings,"frequency_mid")!=0 ||
+        obs_data_get_int(preset_settings,"frequency_high")!=0) return 48;
     obs_data_set_int(preset_settings,"instrument_recipe",3);
     obs_property_modified(recipe,preset_settings);
     if (!visible("slice_history") || !visible("p_interval") || visible("mv_x") ||
@@ -265,6 +327,7 @@ int main(int argc, char **argv)
             value("mv_x")< -150 || value("mv_x")>250 || value("mv_y")< -150 || value("mv_y")>250 ||
             value("residual_scale")<30 || value("residual_scale")>110 ||
             value("residual_loss")<0 || value("residual_loss")>30 ||
+            value("frequency_low")!=0 || value("frequency_mid")!=0 || value("frequency_high")!=0 ||
             value("vector_strength")<80 || value("vector_strength")>250 ||
             value("vector_persistence")<25 || value("vector_persistence")>75 ||
             value("slice_history")<2 || value("slice_history")>6 || value("slice_height")<4 || value("slice_height")>24 ||
@@ -324,13 +387,15 @@ int main(int argc, char **argv)
     obs_data_set_int(saved,"reference",0);
     obs_data_set_bool(saved,"layer_flow",false);
     obs_data_set_bool(saved,"layer_compressed",false);
+    obs_data_set_int(saved,"frequency_high",65);
     reload=obs_source_create("framerot_filter","custom-instrument",saved,nullptr);
     if(!reload)return 56;
     reloaded=obs_source_get_settings(reload);
     if(obs_data_get_int(reloaded,"codec_height")!=144 ||
         obs_data_get_int(reloaded,"reference")!=0 ||
         obs_data_get_bool(reloaded,"layer_flow") ||
-        obs_data_get_bool(reloaded,"layer_compressed")) return 57;
+        obs_data_get_bool(reloaded,"layer_compressed") ||
+        obs_data_get_int(reloaded,"frequency_high")!=65) return 57;
     obs_data_release(reloaded);
     obs_source_release(reload);
     obs_data_release(saved);

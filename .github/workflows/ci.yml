@@ -38,7 +38,7 @@ jobs:
             libxkbcommon-dev libx11-dev libx11-xcb-dev libxcb1-dev \
             libxcb-xinput-dev libglib2.0-dev zlib1g-dev
 
-      - name: Build pinned OBS 32 SDK, plugin, and run 14 tests
+      - name: Build pinned OBS 32 SDK, plugin, and run 18 tests
         run: bash .github/scripts/ci-build-linux.sh
 
       - name: Upload verified Linux binary and source

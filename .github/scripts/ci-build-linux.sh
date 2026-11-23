@@ -27,7 +27,7 @@ cmake -S "$root" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
 cmake --build "$build" --parallel 4
 listed="$(ctest --test-dir "$build" -N)"
 printf '%s\n' "$listed"
-printf '%s\n' "$listed" | grep -F 'Total Tests: 14'
+printf '%s\n' "$listed" | grep -F 'Total Tests: 18'
 printf '%s\n' "$listed" | grep -F 'mosh_obs_scene_projection_camera'
 export LD_LIBRARY_PATH="$sdk/lib:$sdk/lib/obs-plugins:${LD_LIBRARY_PATH:-}"
 export LIBGL_ALWAYS_SOFTWARE=1

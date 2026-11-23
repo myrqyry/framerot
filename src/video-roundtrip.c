@@ -5,6 +5,7 @@
  */
 #include "video-roundtrip.h"
 #include "mpeg4-edit.h"
+#include "packet-overwrite.h"
 
 #include "ffmpeg-compat.h"
 #include <libavutil/error.h>
@@ -16,6 +17,27 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+
+int framerot_packet_overwrite(AVPacket *packet,const uint8_t *bytes,size_t size)
+{
+    if (!packet || !packet->data || packet->size<0 || !bytes ||
+        !size || size>(size_t)INT_MAX)
+        return -1;
+    /* av_packet_make_writable performs COW if Anchor/Echo/Rewind retained
+     * a reference. For a unique packet with enough space, no new FFmpeg
+     * payload allocation or AVPacket metadata copy is necessary. */
+    if (av_packet_make_writable(packet)<0)
+        return -1;
+    if (size>(size_t)packet->size) {
+        if (av_grow_packet(packet,(int)(size-(size_t)packet->size))<0)
+            return -1;
+    } else if (size<(size_t)packet->size) {
+        av_shrink_packet(packet,(int)size);
+    }
+    memcpy(packet->data,bytes,size);
+    return 0;
+}
 
 struct retro_video {
 	AVCodecContext *encoder;
@@ -64,7 +86,9 @@ struct retro_video {
     unsigned layers;
     bool hold, release_anchor;
     struct mpeg4_edit_options editor;
-    uint64_t edited_packets,edited_vectors,edited_coefficients,edited_blocks,edit_unsupported;
+    struct mpeg4_edit_buffer edit_scratch; /* codec-thread owned, reused P-VOP output */
+    uint64_t edited_packets,edited_vectors,edited_coefficients,edited_blocks,edited_phantom_blocks,edit_unsupported;
+    uint64_t edited_frequency_coefficients[3];
     int p_interval;
     int p_burst;
 	int mosh_skip_keyframes;
@@ -219,6 +243,7 @@ void retro_video_destroy(struct retro_video *ctx)
     for (int i = 0; i < 12; ++i) av_packet_free(&ctx->rewind_packets[i]);
     av_packet_free(&ctx->rewind_incoming);
     free(ctx->flow_previous);
+    mpeg4_edit_buffer_destroy(&ctx->edit_scratch);
 	av_packet_free(&ctx->anchor_packet);
 	av_packet_free(&ctx->echo_packet);
 	av_packet_free(&ctx->packet);
@@ -252,6 +277,11 @@ struct retro_video *retro_video_create(const struct retro_video_options *options
         case RETRO_MOSH_INSTRUMENT: reference=options->mosh_reference; predictive=options->mosh_predictive;
             layers=options->mosh_layers; break;
     }
+    if ((layers&RETRO_LAYER_COMPRESSED) &&
+        (options->mosh_frequency[0]< -100 || options->mosh_frequency[0]>200 ||
+         options->mosh_frequency[1]< -100 || options->mosh_frequency[1]>200 ||
+         options->mosh_frequency[2]< -100 || options->mosh_frequency[2]>200))
+        return NULL;
     if (reference<RETRO_REFERENCE_LIVE || reference>RETRO_REFERENCE_ANCHOR ||
         predictive<RETRO_PREDICTIVE_LIVE || predictive>RETRO_PREDICTIVE_REWIND ||
         (layers & ~(RETRO_LAYER_FLOW|RETRO_LAYER_PEEL|RETRO_LAYER_SHIMMER|RETRO_LAYER_COMPRESSED)) ||
@@ -259,7 +289,8 @@ struct retro_video *retro_video_create(const struct retro_video_options *options
          (options->mosh_mv_x< -500 || options->mosh_mv_x>500 ||
           options->mosh_mv_y< -500 || options->mosh_mv_y>500 ||
           options->mosh_residual< -200 || options->mosh_residual>200 ||
-          options->mosh_residual_loss<0 || options->mosh_residual_loss>100)) ||
+          options->mosh_residual_loss<0 || options->mosh_residual_loss>100 ||
+         options->mosh_phantom<0 || options->mosh_phantom>100)) ||
         options->mosh_skip_keyframes < 0 || options->mosh_skip_keyframes > 16 ||
         (predictive>=RETRO_PREDICTIVE_DROP && predictive<=RETRO_PREDICTIVE_ECHO &&
          (options->mosh_p_interval<2 || options->mosh_p_interval>60)) ||
@@ -292,8 +323,14 @@ struct retro_video *retro_video_create(const struct retro_video_options *options
 
 	ctx->mosh_skip_keyframes = options->mosh_skip_keyframes;
     ctx->reference=reference; ctx->predictive=predictive; ctx->layers=layers;
-    ctx->editor=(struct mpeg4_edit_options){options->width,options->height,options->fps,
-        options->mosh_mv_x, options->mosh_mv_y, options->mosh_residual, options->mosh_residual_loss,0};
+    ctx->editor=(struct mpeg4_edit_options){
+        .width=options->width,.height=options->height,.fps=options->fps,
+        .x_scale=options->mosh_mv_x,.y_scale=options->mosh_mv_y,
+        .residual_scale=options->mosh_residual,.residual_loss=options->mosh_residual_loss,
+        .seed=0,.phantom_percent=options->mosh_phantom,
+        .frequency={options->mosh_frequency[0],options->mosh_frequency[1],
+                    options->mosh_frequency[2]},
+    };
     ctx->p_interval = options->mosh_p_interval;
     ctx->p_burst = options->mosh_p_burst;
     ctx->rounding_interval = options->mosh_rounding_interval;
@@ -379,13 +416,19 @@ bool retro_video_set_live_options(struct retro_video *ctx,const struct retro_vid
        o->mosh_vector_persistence<0||o->mosh_vector_persistence>100||
        (ctx->layers&RETRO_LAYER_COMPRESSED&&(o->mosh_mv_x< -500||o->mosh_mv_x>500||
         o->mosh_mv_y< -500||o->mosh_mv_y>500||o->mosh_residual< -200||o->mosh_residual>200||
-        o->mosh_residual_loss<0||o->mosh_residual_loss>100)))return false;
+        o->mosh_residual_loss<0||o->mosh_residual_loss>100||
+        o->mosh_phantom<0||o->mosh_phantom>100||
+        o->mosh_frequency[0]< -100||o->mosh_frequency[0]>200||
+        o->mosh_frequency[1]< -100||o->mosh_frequency[1]>200||
+        o->mosh_frequency[2]< -100||o->mosh_frequency[2]>200)))return false;
     ctx->mosh_skip_keyframes=o->mosh_skip_keyframes;ctx->p_interval=o->mosh_p_interval;
     ctx->p_burst=o->mosh_p_burst;ctx->anchor_span=o->mosh_anchor_span;
     ctx->rounding_interval=o->mosh_rounding_interval;ctx->slice_height=o->mosh_slice_height;
     ctx->flow_strength=o->mosh_vector_strength;ctx->flow_persistence=o->mosh_vector_persistence;
     ctx->editor.x_scale=o->mosh_mv_x;ctx->editor.y_scale=o->mosh_mv_y;
     ctx->editor.residual_scale=o->mosh_residual;ctx->editor.residual_loss=o->mosh_residual_loss;
+    ctx->editor.phantom_percent=o->mosh_phantom;
+    for(int band=0;band<3;band++)ctx->editor.frequency[band]=o->mosh_frequency[band];
     return true;
 }
 
@@ -572,19 +615,21 @@ int retro_video_process(struct retro_video *ctx, const uint8_t *rgba, int input_
         if (!is_key && (ctx->layers&RETRO_LAYER_COMPRESSED)) {
             uint8_t *bytes=NULL;size_t size=0;struct mpeg4_edit_stats stats;
             ctx->editor.seed=(uint32_t)ctx->packets;
-            int edit=mpeg4_edit_p_vop(ctx->packet->data,(size_t)ctx->packet->size,
-                &ctx->editor,&bytes,&size,&stats);
+            int edit=mpeg4_edit_p_vop_reuse(ctx->packet->data,(size_t)ctx->packet->size,
+                &ctx->editor,&ctx->edit_scratch,&bytes,&size,&stats);
             if(edit<0)ctx->edit_unsupported++;
             if(edit==1) {
-                AVPacket *replacement=av_packet_alloc();
-                if(!replacement || av_new_packet(replacement,(int)size)<0 ||
-                   av_packet_copy_props(replacement,ctx->packet)<0) {
-                    free(bytes);av_packet_free(&replacement);av_packet_unref(ctx->packet);return -1;
+                /* Editor scratch remains codec-thread owned. Reuse the
+                 * encoder packet itself, preserving PTS, flags and side data. */
+                if(framerot_packet_overwrite(ctx->packet,bytes,size)<0) {
+                    av_packet_unref(ctx->packet);
+                    return -1;
                 }
-                memcpy(replacement->data,bytes,size);free(bytes);
-                av_packet_unref(ctx->packet);av_packet_move_ref(ctx->packet,replacement);av_packet_free(&replacement);
                 ctx->edited_packets++;ctx->edited_vectors+=stats.vectors;
                 ctx->edited_coefficients+=stats.coefficients;ctx->edited_blocks+=stats.blocks;
+                ctx->edited_phantom_blocks+=stats.phantom_blocks;
+                for(int band=0;band<3;band++)
+                    ctx->edited_frequency_coefficients[band]+=stats.frequency_coefficients[band];
             }
         }
         if (avcodec_send_packet(ctx->decoder, ctx->packet) < 0) {
@@ -790,4 +835,9 @@ uint64_t retro_video_compressed_packets(const struct retro_video *s){return s?s-
 uint64_t retro_video_compressed_vectors(const struct retro_video *s){return s?s->edited_vectors:0;}
 uint64_t retro_video_compressed_coefficients(const struct retro_video *s){return s?s->edited_coefficients:0;}
 uint64_t retro_video_compressed_blocks(const struct retro_video *s){return s?s->edited_blocks:0;}
+uint64_t retro_video_compressed_phantom_blocks(const struct retro_video *s){return s?s->edited_phantom_blocks:0;}
+uint64_t retro_video_compressed_frequency_coefficients(const struct retro_video *s,int band)
+{
+    return s && band>=0 && band<3 ? s->edited_frequency_coefficients[band] : 0;
+}
 uint64_t retro_video_compressed_unsupported(const struct retro_video *s){return s?s->edit_unsupported:0;}

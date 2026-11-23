@@ -40,9 +40,29 @@ endif()
 endif()
 
 enable_testing()
+# Python is optional for native codec builds; use it when present to keep
+# opt-in capture UI selection logic under regression coverage.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME mosh_capture_comparison_layout COMMAND
+        ${Python3_EXECUTABLE} -B -m unittest discover
+        -s ${CMAKE_CURRENT_SOURCE_DIR}/tools -p test_capture_showcase.py)
+endif()
 add_executable(test-mosh-compressed tests/test-mosh-compressed.c src/video-roundtrip.c src/mpeg4-edit.c src/portable-sync.cpp)
 target_link_libraries(test-mosh-compressed PRIVATE retro_ffmpeg Threads::Threads ${framerot_math})
 add_test(NAME mosh_codec_compressed COMMAND test-mosh-compressed)
+# Linux/POSIX opt-in microbenchmark; not an automated performance gate.
+if(UNIX)
+    add_executable(bench-packet-overwrite EXCLUDE_FROM_ALL tools/bench-packet-overwrite.c
+        src/video-roundtrip.c src/mpeg4-edit.c src/portable-sync.cpp)
+    target_link_libraries(bench-packet-overwrite PRIVATE retro_ffmpeg Threads::Threads ${framerot_math})
+endif()
+add_executable(test-mosh-phantom tests/test-mosh-phantom.c src/video-roundtrip.c src/mpeg4-edit.c src/portable-sync.cpp)
+target_link_libraries(test-mosh-phantom PRIVATE retro_ffmpeg Threads::Threads ${framerot_math})
+add_test(NAME mosh_codec_phantom_still COMMAND test-mosh-phantom)
+add_executable(test-mosh-spectral tests/test-mosh-spectral.c src/video-roundtrip.c src/mpeg4-edit.c src/portable-sync.cpp)
+target_link_libraries(test-mosh-spectral PRIVATE retro_ffmpeg Threads::Threads ${framerot_math})
+add_test(NAME mosh_codec_spectral_bands COMMAND test-mosh-spectral)
 add_executable(test-mosh-instrument tests/test-mosh-instrument.c src/video-roundtrip.c src/mpeg4-edit.c src/portable-sync.cpp)
 target_link_libraries(test-mosh-instrument PRIVATE retro_ffmpeg Threads::Threads ${framerot_math})
 add_test(NAME mosh_codec_instrument COMMAND test-mosh-instrument)
@@ -106,9 +126,17 @@ target_link_libraries(test-mosh-mix PRIVATE OBS::libobs)
 add_test(NAME mosh_obs_mix_alpha COMMAND test-mosh-mix $<TARGET_FILE:framerot> ${CMAKE_CURRENT_SOURCE_DIR})
 set_tests_properties(mosh_obs_mix_alpha PROPERTIES TIMEOUT 25)
 
-# Opt-in documentation capture utility; it loads the actual plugin.
-add_executable(capture-showcase EXCLUDE_FROM_ALL tools/capture-showcase.cpp)
+# Capture execution is opt-in, but build its bridge for a regression proving
+# that independent OBS captures preserve the exact clean frame sequence.
+add_executable(capture-showcase tools/capture-showcase.cpp)
 target_link_libraries(capture-showcase PRIVATE OBS::libobs Threads::Threads)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME mosh_obs_capture_frame_sync COMMAND
+        ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-capture-frame-sync.py
+        $<TARGET_FILE:capture-showcase> $<TARGET_FILE:framerot>
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(mosh_obs_capture_frame_sync PROPERTIES TIMEOUT 25)
+endif()
 
 add_executable(test-mosh-performance tests/test-mosh-performance.cpp)
 target_link_libraries(test-mosh-performance PRIVATE OBS::libobs)
