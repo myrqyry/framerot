@@ -31,7 +31,8 @@ printf '%s\n' "$listed" | grep -F 'Total Tests: 18'
 printf '%s\n' "$listed" | grep -F 'mosh_obs_scene_projection_camera'
 export LD_LIBRARY_PATH="$sdk/lib:$sdk/lib/obs-plugins:${LD_LIBRARY_PATH:-}"
 export LIBGL_ALWAYS_SOFTWARE=1
-xvfb-run -a -s '-screen 0 1280x1024x24' ctest --test-dir "$build" --output-on-failure
+xvfb-run -a -s '-screen 0 1280x1024x24' ctest --test-dir "$build" --output-on-failure --no-tests=error --output-junit "$work/ctest.xml"
+python3 -B "$root/.github/scripts/verify_ctest_report.py" "$work/ctest.xml" 18
 cmake --install "$build" --prefix "$stage/framerot"
 module="$stage/framerot/bin/64bit/framerot.so"
 test -s "$module"
@@ -56,4 +57,7 @@ if tar -tzf "$out/framerot-source.tar.gz" |
   echo '::error::Private local state leaked into source archive'
   exit 1
 fi
-sha256sum "$out/"*.tar.gz
+(cd "$out" && sha256sum ./*.tar.gz > ARCHIVE-SHA256SUMS && sha256sum -c ARCHIVE-SHA256SUMS)
+mkdir "$work/extracted"
+tar -xzf "$out/framerot-linux-x86_64-obs32.tar.gz" -C "$work/extracted"
+(cd "$work/extracted" && sha256sum -c "$out/SHA256SUMS")
