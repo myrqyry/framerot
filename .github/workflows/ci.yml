@@ -2,7 +2,7 @@ name: Build and test
 
 on:
   push:
-    branches: [main]
+    branches: [main, ci/shared-plugin-build]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -15,46 +15,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  linux:
-    name: Linux x86_64 · OBS 32.2.0 · native tests
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Verify README and test report contracts
-        run: |
-          python3 -B .github/scripts/test-readme-links.py
-          python3 -B .github/scripts/check_readme_links.py README.md
-          python3 -B .github/scripts/test-ctest-report.py
-
-      - name: Install native build and headless GPU dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build pkg-config curl ca-certificates \
-            xvfb xauth libgl1-mesa-dri \
-            extra-cmake-modules libsimde-dev uthash-dev uuid-dev \
-            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev \
-            libpulse-dev libasound2-dev libjansson-dev libdrm-dev libegl-dev \
-            libgl-dev libopengl-dev libwayland-dev wayland-protocols \
-            libxkbcommon-dev libx11-dev libx11-xcb-dev libxcb1-dev \
-            libxcb-xinput-dev libglib2.0-dev zlib1g-dev
-
-      - name: Build pinned OBS 32 SDK, plugin, and run 18 tests
-        run: bash .github/scripts/ci-build-linux.sh
-
-      - name: Upload verified Linux binary and source
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: framerot-linux-obs32-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/framerot-ci/artifacts/framerot-linux-x86_64-obs32.tar.gz
-            ${{ runner.temp }}/framerot-ci/artifacts/framerot-source.tar.gz
-            ${{ runner.temp }}/framerot-ci/artifacts/SHA256SUMS
-            ${{ runner.temp }}/framerot-ci/artifacts/ARCHIVE-SHA256SUMS
-          if-no-files-found: error
-          retention-days: 14
+  build:
+    uses: myrqyry/obs-plugin-ci/.github/workflows/build.yml@afeed7458c9fa5da341cc464042fa0f878ecf33c
+    with:
+      module: framerot
+      profile: linux-obs32
+      driver: caller
+      minimum-tests: 18
+      source-package: true

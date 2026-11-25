@@ -10,7 +10,7 @@ Download the Linux artifact from a successful [Build and test run](https://githu
 
 ~~~bash
 mkdir -p "$HOME/.config/obs-studio/plugins"
-tar -xzf framerot-linux-x86_64-obs32.tar.gz -C "$HOME/.config/obs-studio/plugins"
+tar -xzf framerot-linux-x86_64-obs32.2.0-test.tar.gz -C "$HOME/.config/obs-studio/plugins"
 ~~~
 
 Run the commands from the directory containing the tarball. The installed module should be at:

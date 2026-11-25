@@ -58,7 +58,7 @@ Reports OBS frame counts, missed render frames, average render CPU time and filt
 ## CI builds
 
 The GitHub Actions workflow **Build and test** is configured for pushes and PRs
-to `main`, and can also be started manually in the Actions tab. It builds
+to `main`, and can also be started manually in the Actions tab. It calls the shared [OBS plugin CI workflow](https://github.com/myrqyry/obs-plugin-ci) with the qualified Linux-only profile. It builds
 **OBS 32.2.0** from a SHA-256-verified upstream source archive on a native
 Ubuntu 24.04 x86_64 runner, then builds `framerot` against that SDK (not against
 the runner's potentially older `libobs-dev` package).
@@ -67,12 +67,13 @@ The job runs **all 18 native and capture tests** using FFmpeg and software-rende
 under Xvfb, including landscape/portrait effects and the original scene
 geometry regression. Only after those pass does it stage the plugin and upload:
 
-- `framerot-linux-x86_64-obs32.tar.gz`: extract into the OBS plugin directory;
+- `framerot-linux-x86_64-obs32.2.0-test.tar.gz`: extract into the OBS plugin directory;
   includes `framerot/bin/64bit/framerot.so`, COPYING, README, the three documentation files and OBS SDK version
 - `framerot-source.tar.gz`: tracked source files at the tested Git commit (private local notes and build outputs excluded)
-- `SHA256SUMS`: checksums for installed-package files
+- `SHA256SUMS`: single-archive checksum, in each downloadable artifact
+- `PAYLOAD-SHA256SUMS`: checksums for installed-package files, in the separate source artifact
 
-This artifact is **Linux x86_64 only** and expects compatible system FFmpeg
+The native test artifact is **Linux x86_64 only** and expects compatible system FFmpeg
 libraries (as used by Ubuntu 24.04 and Linux Mint 22). It is not a universal
 binary and is not the equivalent of the Windows/macOS distributions available
 for some of the other OBS plugins. Those targets need separate, native OBS

@@ -44,7 +44,7 @@ Instrument is the default: combine effects, play with their controls, or discove
 
 ## Get started
 
-1. On the [Actions page](https://github.com/myrqyry/framerot/actions), open a successful **Build and test** run for the revision you want. Download its Linux artifact and extract the included `framerot-linux-x86_64-obs32.tar.gz` archive.
+1. On the [Actions page](https://github.com/myrqyry/framerot/actions), open a successful **Build and test** run for the revision you want. Download its Linux artifact and extract the included `framerot-linux-x86_64-obs32.2.0-test.tar.gz` archive.
 2. Close OBS. Extract the archive into `~/.config/obs-studio/plugins/`. The archive already contains the `framerot/` directory.
 3. Open OBS, choose a video source, open **Filters → Effect Filters → + → framerot**. Look near the bottom of the list: lowercase names can sort after uppercase entries.
 4. Move in front of your camera or play footage with moving objects. The default Instrument settings are already active.
