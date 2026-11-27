@@ -5,6 +5,7 @@
 #include <string.h>
 #include <chrono>
 #include <thread>
+#include <initializer_list>
 static void pause_ms(void) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
 int main(void) {
     struct retro_video_options o=retro_video_default_options(RETRO_VIDEO_MPEG4_PART2);
@@ -77,12 +78,32 @@ int main(void) {
     printf("LIVE_CONTROL guaranteed=true high_band_edits=%llu neutral_stable=true\n",
         (unsigned long long)edited);
     codec_worker_destroy(active);
+    // Exercise normal and coarse OS timer resolution. A sleep request is
+    // a minimum delay, not a clock; count retries against elapsed time.
     o.bitrate=0;
-    w=codec_worker_create(&o); assert(w);
-    for(int i=0;i<600;i++) { codec_worker_submit(w,input,64*4); pause_ms(); }
-    s=codec_worker_stats(w);
-    assert(s.errors>0 && s.errors<=4 && !codec_worker_take(w,output));
-    printf("RECOVERY errors=%llu\n",(unsigned long long)s.errors);
-    codec_worker_destroy(w);
+    using clock=std::chrono::steady_clock;
+    using namespace std::chrono_literals;
+    for (auto poll : {1ms, 16ms}) {
+        w=codec_worker_create(&o); assert(w);
+        const auto start=clock::now();
+        const auto deadline=start+750ms;
+        do {
+            codec_worker_submit(w,input,64*4);
+            assert(!codec_worker_take(w,output));
+            std::this_thread::sleep_for(poll);
+        } while(clock::now()<deadline);
+        s=codec_worker_stats(w);
+        const auto elapsed=clock::now()-start;
+        const auto max_errors=1+elapsed/250ms;
+        fprintf(stderr,"RECOVERY poll_ms=%lld elapsed_ms=%lld errors=%llu max=%lld completed=%llu\n",
+            (long long)poll.count(),
+            (long long)std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(),
+            (unsigned long long)s.errors,(long long)max_errors,
+            (unsigned long long)s.completed);
+        assert(s.errors>=2 && s.errors<=static_cast<uint64_t>(max_errors));
+        assert(s.completed==0 && codec_worker_faulted(w));
+        assert(!codec_worker_take(w,output));
+        codec_worker_destroy(w);
+    }
     return 0;
 }

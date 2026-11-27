@@ -88,6 +88,24 @@ macOS. Until the new hosted runs complete, the verified target remains
 Linux OBS32.2.0/FFmpeg 6. These are test artifacts, not automatic releases
 or updates to any existing installation.
 
+### First full-matrix qualification (299d2ec)
+
+[Run 45956109467](https://github.com/myrqyry/framerot/actions/runs/45956109467)
+passed all 18 Linux cases on both OBS versions (FFmpeg 6 and 8).
+All six Windows/macOS modules compiled and passed 11 of 12 tests;
+the worker recovery check incorrectly assumed 600 one-millisecond
+sleep requests consumed no more than one second. A local reproduction
+using five-millisecond polling measured 12 errors in 3033 ms, violating
+the old fixed limit despite the correct 250 ms backoff.
+
+The replacement tests use steady-clock deadlines at both 1 ms and 16 ms
+polling intervals. They require repeated attempts, reject attempts
+exceeding the elapsed-time backoff bound, and verify zero decoded
+outputs and an active fault. A separate local mutation with the retry
+delay removed failed the new bound (710 errors in 750 ms). Production
+codec behavior is unchanged. Native hosted requalification remains
+required.
+
 ## Native portability and codec-only verification
 
 The engine requires only libavcodec, libavutil and libswscale, and uses
