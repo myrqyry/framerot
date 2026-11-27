@@ -5,7 +5,7 @@ A native OBS Studio datamoshing and video-decay filter. Turn moving footage into
 Instrument is the default: combine effects, play with their controls, or discover a new combination with the randomizer.
 
 > [!WARNING]
-> Experimental software. Use at your own risk, especially during live broadcasts. Linux x86_64 / OBS 32.2.0 / FFmpeg 6 is the validated target. Windows and macOS native qualification is in progress; no verified packages yet. HDR effects are not supported.
+> Experimental software. Use at your own risk, especially during live broadcasts. Linux x86_64 / OBS 32.2.0 / FFmpeg 6 is the validated target. The shared CI now targets Windows, macOS and Linux for OBS32/33; only Linux OBS32 is qualified until the new hosted builds pass. HDR effects are not supported.
 
 ## Showcase
 
@@ -44,8 +44,8 @@ Instrument is the default: combine effects, play with their controls, or discove
 
 ## Get started
 
-1. On the [Actions page](https://github.com/myrqyry/framerot/actions), open a successful **Build and test** run for the revision you want. Download its Linux artifact and extract the included `framerot-linux-x86_64-obs32.2.0-test.tar.gz` archive.
-2. Close OBS. Extract the archive into `~/.config/obs-studio/plugins/`. The archive already contains the `framerot/` directory.
+1. On the [Actions page](https://github.com/myrqyry/framerot/actions), open a successful **Build and test** run for the revision you want. Download the artifact matching your platform and OBS version. The verified Linux OBS32 package is `framerot-linux-x86_64-obs32.2.0-test.tar.gz`; other targets are qualification candidates until their jobs pass.
+2. On Linux, close OBS. Extract the archive into `~/.config/obs-studio/plugins/`. The archive already contains the `framerot/` directory.
 3. Open OBS, choose a video source, open **Filters → Effect Filters → + → framerot**. Look near the bottom of the list: lowercase names can sort after uppercase entries.
 4. Move in front of your camera or play footage with moving objects. The default Instrument settings are already active.
 5. Change **Wet mix** to blend the effect with your original image, or choose a new starting point.
