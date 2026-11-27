@@ -8,6 +8,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(FRAMEROT_CODEC_ONLY "Build and run the codec engine tests without OBS" OFF)
 option(FRAMEROT_OBS_TESTS "Build Linux OBS rendering tests" ON)
+set(FRAMEROT_PACKAGE_LAYOUT "legacy" CACHE STRING "OBS module layout")
+set_property(CACHE FRAMEROT_PACKAGE_LAYOUT PROPERTY STRINGS legacy modern)
+if(NOT FRAMEROT_PACKAGE_LAYOUT MATCHES "^(legacy|modern)$")
+    message(FATAL_ERROR "Invalid FRAMEROT_PACKAGE_LAYOUT")
+endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(RetroFFmpeg)
 find_package(Threads REQUIRED)
@@ -32,10 +37,19 @@ set_target_properties(framerot PROPERTIES PREFIX "")
 if(APPLE)
     set_target_properties(framerot PROPERTIES BUNDLE TRUE BUNDLE_EXTENSION plugin
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.myrqyry.framerot"
-        MACOSX_BUNDLE_BUNDLE_NAME "framerot")
-    install(TARGETS framerot LIBRARY DESTINATION .)
+        MACOSX_BUNDLE_BUNDLE_NAME "framerot"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PluginInfo.plist.in"
+        INSTALL_RPATH "@executable_path/../Frameworks"
+        INSTALL_RPATH_USE_LINK_PATH FALSE)
+    install(TARGETS framerot BUNDLE DESTINATION . LIBRARY DESTINATION .)
 else()
-    install(TARGETS framerot LIBRARY DESTINATION bin/64bit RUNTIME DESTINATION bin/64bit)
+    set(_module_destination bin/64bit)
+    if(FRAMEROT_PACKAGE_LAYOUT STREQUAL "modern")
+        set(_module_destination .)
+    endif()
+    install(TARGETS framerot LIBRARY DESTINATION "${_module_destination}" RUNTIME DESTINATION "${_module_destination}")
 endif()
 endif()
 

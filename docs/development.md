@@ -57,34 +57,60 @@ Reports OBS frame counts, missed render frames, average render CPU time and filt
 
 ## CI builds
 
-The GitHub Actions workflow **Build and test** is configured for pushes and PRs
-to `main`, and can also be started manually in the Actions tab. It builds
-**OBS 32.2.0** from a SHA-256-verified upstream source archive on a native
-Ubuntu 24.04 x86_64 runner, then builds `framerot` against that SDK (not against
-the runner's potentially older `libobs-dev` package).
+The GitHub Actions workflow **Build and test** calls the shared
+[OBS plugin CI workflow](https://github.com/myrqyry/obs-plugin-ci) with
+the full eight-target matrix: Linux x86_64, Windows x64, Intel macOS and
+Apple Silicon, each against OBS 32.2.0 and 33.0.3. All successful jobs
+produce downloadable, checksummed native test packages. The SDK is built
+from pinned OBS sources; Windows/macOS use the matching native OBS
+dependency SDK. No codec is disabled to obtain a package.
 
-The job runs **all 18 native and capture tests** using FFmpeg and software-rendered OBS/OpenGL
-under Xvfb, including landscape/portrait effects and the original scene
-geometry regression. Only after those pass does it stage the plugin and upload:
+Linux must pass all 18 named cases, including actual OBS/OpenGL render,
+portrait, projection and capture regressions under Xvfb. Windows/macOS
+must build the OBS module and pass the 12 portable codec/capture-layout
+cases against their pinned FFmpeg libraries before staging. The separate
+native codec qualification workflow remains available.
 
-- `framerot-linux-x86_64-obs32.tar.gz`: extract into the OBS plugin directory;
-  includes `framerot/bin/64bit/framerot.so`, COPYING, README, the three documentation files and OBS SDK version
-- `framerot-source.tar.gz`: tracked source files at the tested Git commit (private local notes and build outputs excluded)
-- `SHA256SUMS`: checksums for installed-package files
+- Linux: `framerot-linux-x86_64-obs<version>-test.tar.gz`.
+- Windows/macOS: `framerot-<target>-obs<version>-test.zip`.
+- OBS32 Linux/Windows use the legacy bin/64bit module layout; OBS33
+  uses the module root. macOS uses an ad-hoc signed plugin bundle.
+- Each package includes COPYING, the README, three guides, the OBS SDK
+  version receipt and a SHA256SUMS archive checksum.
+- Linux OBS32 also produces a corresponding source archive and a
+  PAYLOAD-SHA256SUMS manifest tied to its binary package.
 
-This artifact is **Linux x86_64 only** and expects compatible system FFmpeg
-libraries (as used by Ubuntu 24.04 and Linux Mint 22). It is not a universal
-binary and is not the equivalent of the Windows/macOS distributions available
-for some of the other OBS plugins. Those targets need separate, native OBS
-SDK and FFmpeg dependency handling before claiming build support. No Docker,
-deployments, or automatic updates to your local OBS installation are involved.
+The native archives use FFmpeg supplied by the compatible OBS runtime
+(or compatible system libraries on Linux). Do not substitute libraries
+from a different ABI. A native compile/codec test and static module
+inspection do not establish successful loading/rendering on Windows or
+macOS. Until the new hosted runs complete, the verified target remains
+Linux OBS32.2.0/FFmpeg 6. These are test artifacts, not automatic releases
+or updates to any existing installation.
 
+### First full-matrix qualification (299d2ec)
+
+[Run 45956109467](https://github.com/myrqyry/framerot/actions/runs/45956109467)
+passed all 18 Linux cases on both OBS versions (FFmpeg 6 and 8).
+All six Windows/macOS modules compiled and passed 11 of 12 tests;
+the worker recovery check incorrectly assumed 600 one-millisecond
+sleep requests consumed no more than one second. A local reproduction
+using five-millisecond polling measured 12 errors in 3033 ms, violating
+the old fixed limit despite the correct 250 ms backoff.
+
+The replacement tests use steady-clock deadlines at both 1 ms and 16 ms
+polling intervals. They require repeated attempts, reject attempts
+exceeding the elapsed-time backoff bound, and verify zero decoded
+outputs and an active fault. A separate local mutation with the retry
+delay removed failed the new bound (710 errors in 750 ms). Production
+codec behavior is unchanged. Native hosted requalification remains
+required.
 
 ## Native portability and codec-only verification
 
 The engine requires only libavcodec, libavutil and libswscale, and uses
 portable C++17 synchronization around the C codec/packet editor. The
-nine engine tests run without OBS:
+eleven engine tests run without OBS (plus the Python capture-layout test):
 
 ~~~bash
 cmake -S . -B build-codec-native -DFRAMEROT_CODEC_ONLY=ON \
@@ -102,9 +128,9 @@ It runs the codec-only suite and does not publish OBS plugins.
 
 For an experimental native module build, omit FRAMEROT_CODEC_ONLY and
 supply a matching libobs_DIR plus RETRO_FFMPEG_ROOT. CMake stages a
-Windows DLL in bin/64bit or a macOS plugin bundle. Native OBS module
-loading, graphics backend testing and packaging are not yet qualified.
-Do not distribute the staged module until these checks pass.
+Windows DLL in the selected legacy/modern layout or a macOS plugin bundle.
+Native OBS module loading and graphics backend testing remain separate
+qualification requirements; successful CI packages are for testing.
 
 The earlier 0.8.0 codec slice was qualified against both FFmpeg 6
 and an isolated FFmpeg 8.0 build. The current Spectral Melt / Phantom Drift

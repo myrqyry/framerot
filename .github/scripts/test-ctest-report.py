@@ -1,6 +1,6 @@
 import unittest
 import xml.etree.ElementTree as ET
-from verify_ctest_report import verify
+from verify_ctest_report import verify, required_names
 
 def report():
     root = ET.Element("testsuite")
@@ -11,6 +11,17 @@ def report():
 class ReportTests(unittest.TestCase):
     def test_complete(self):
         self.assertEqual(verify(report(), 18), 18)
+
+    def test_rejects_wrong_named_case_at_same_count(self):
+        for profile in ("linux", "native"):
+            names = sorted(required_names(profile))
+            root = ET.Element("testsuite")
+            for name in names:
+                ET.SubElement(root, "testcase", name=name, status="run")
+            self.assertEqual(verify(root, len(names), names), len(names))
+            root[0].set("name", "unrelated_test")
+            with self.assertRaises(ValueError):
+                verify(root, len(names), names)
 
     def test_rejects_skip(self):
         root = report()
